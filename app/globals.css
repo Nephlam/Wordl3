@@ -1,7 +1,96 @@
 @import "tailwindcss";
 
+@theme {
+  /* ENABL3 Brand colours */
+  --color-brand-dark: #0D3B66;
+  --color-brand-mid: #7A7D80;
+  --color-brand-light: #A7A9AC;
+  --color-brand-orange: #FF8C00;
+  --color-brand-peach: #FFC089;
+
+  /* Wordle feedback colours */
+  --color-absent: #565758;
+  --color-present: #F5C518;
+  --color-correct: #6AAA64;
+}
+
 body {
   margin: 0;
   padding: 0;
-  background-color: #111827;
+  background-color: var(--color-brand-dark); /* fallback, will be overridden by main bg */
+}
+@keyframes tile-flip {
+  0% {
+    transform: rotateX(0deg);
+  }
+  50% {
+    transform: rotateX(90deg);
+  }
+  100% {
+    transform: rotateX(0deg);
+  }
+}
+
+.tile-flip {
+  animation: tile-flip 0.5s ease forwards;
+  backface-visibility: hidden;
+}
+
+@keyframes tile-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  20% {
+    transform: translateY(-12px);
+  }
+  40% {
+    transform: translateY(4px);
+  }
+  60% {
+    transform: translateY(-6px);
+  }
+  80% {
+    transform: translateY(2px);
+  }
+}
+
+.tile-bounce {
+  animation: tile-bounce 0.6s ease forwards;
+}
+
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100vh) rotate(720deg);
+    opacity: 0.2;
+  }
+}
+
+.confetti-piece {
+  position: fixed;
+  width: 8px;
+  height: 8px;
+  top: -10px;
+  z-index: 50;
+  animation: confetti-fall 3s ease-in forwards;
+  pointer-events: none;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.6s ease forwards;
 }

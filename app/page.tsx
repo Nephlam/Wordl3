@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import Tutorial from "@/components/Tutorial";
 
 type CellStatus = "" | "correct" | "present" | "absent";
 
@@ -33,6 +34,12 @@ export default function Home() {
   const [keyStatuses, setKeyStatuses] = useState<Record<string, CellStatus>>({});
   const [message, setMessage] = useState("");
   const [explanationText, setExplanationText] = useState("");
+  const [animatingRow, setAnimatingRow] = useState<number | null>(null);
+  const [flippingTiles, setFlippingTiles] = useState<boolean[]>([]);
+  const [winningRow, setWinningRow] = useState<number | null>(null);
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [entranceDone, setEntranceDone] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
 
   // Fetch puzzle
   useEffect(() => {
@@ -63,7 +70,17 @@ export default function Home() {
     }
     fetchPuzzle();
   }, []);
-
+  // Show tutorial only if not previously seen
+    useEffect(() => {
+        const seenTutorial = localStorage.getItem("wordl3_tutorial_seen");
+        if (!seenTutorial) {
+          setShowTutorial(true);
+        }
+      }, []);
+      const closeTutorial = () => {
+    setShowTutorial(false);
+    localStorage.setItem("wordl3_tutorial_seen", "true");
+  };
   // Reset board when puzzle changes
   useEffect(() => {
     if (!puzzle) return;
@@ -76,6 +93,11 @@ export default function Home() {
     setKeyStatuses({});
     setMessage("");
     setExplanationText("");
+    setAnimatingRow(null);
+    setFlippingTiles([]);
+    setWinningRow(null);
+    setEntranceDone(false);
+    setTimeout(() => setEntranceDone(true), 50);
   }, [puzzle]);
 
   // Evaluation logic (unchanged)
@@ -107,6 +129,7 @@ export default function Home() {
   // Key processing
   const processKey = useCallback((key: string) => {
     if (gameOver || !puzzle) return;
+    if (animatingRow !== null) return;   // animation in progress, ignore input
     if (/^[a-zA-Z0-9]$/.test(key) && currentCol < wordLength) {
       setBoard((prev) => {
         const newBoard = prev.map((row) => [...row]);
@@ -124,57 +147,92 @@ export default function Home() {
     } else if (key === "Enter") {
       handleEnter();
     }
-  }, [gameOver, puzzle, currentCol, wordLength, currentRow]);
+  }, [gameOver, puzzle, currentCol, wordLength, currentRow, animatingRow]);
 
   // Handle Enter: update cellStatuses, then win/loss logic
-  const handleEnter = useCallback(() => {
-    if (!puzzle || currentCol !== wordLength) return;
+const handleEnter = useCallback(() => {
+  if (!puzzle || currentCol !== wordLength) return;
+  if (animatingRow !== null) return; // already animating – safety lock
 
-    const guess = board[currentRow].map((l) => l.toUpperCase());
-    const solution = puzzle.word.toUpperCase();
-    const newStatuses = evaluateGuess(guess, solution);
+  const guess = board[currentRow].map((l) => l.toUpperCase());
+  const solution = puzzle.word.toUpperCase();
+  const newStatuses = evaluateGuess(guess, solution);
 
-    // Update cell statuses (functional update ensures latest state)
-    setCellStatuses((prev) => {
-      const updated = prev.map((row) => [...row]);
-      updated[currentRow] = newStatuses;
-      return updated;
-    });
-
-    // Update keyboard colors
-    setKeyStatuses((prev) => {
-      const updated = { ...prev };
-      guess.forEach((letter, i) => {
-        const currentBest = updated[letter] || "";
-        const newStatus = newStatuses[i];
-        if (
-          newStatus === "correct" ||
-          (newStatus === "present" && currentBest !== "correct") ||
-          (newStatus === "absent" && !currentBest)
-        ) {
-          updated[letter] = newStatus;
-        }
-      });
-      return updated;
-    });
-
-    // Set game over flags AFTER statuses update
-    // (use timeout to allow re-render with colors first)
-    setTimeout(() => {
-      if (guess.join("") === solution) {
-        setGameOver(true);
-        setMessage("You won! 🎉");
-        setExplanationText(puzzle.explanation);
-      } else if (currentRow === 4) {
-        setGameOver(true);
-        setMessage("You lost! The word was " + puzzle.word + ".");
-        setExplanationText(puzzle.explanation);
-      } else {
-        setCurrentRow((prev) => prev + 1);
-        setCurrentCol(0);
+  // Update keyboard colours immediately (they don't flip)
+  setKeyStatuses((prev) => {
+    const updated = { ...prev };
+    guess.forEach((letter, i) => {
+      const currentBest = updated[letter] || "";
+      const newStatus = newStatuses[i];
+      if (
+        newStatus === "correct" ||
+        (newStatus === "present" && currentBest !== "correct") ||
+        (newStatus === "absent" && !currentBest)
+      ) {
+        updated[letter] = newStatus;
       }
-    }, 0);
-  }, [puzzle, currentCol, wordLength, board, currentRow, evaluateGuess]);
+    });
+    return updated;
+  });
+
+  // Begin flip animation
+  const row = currentRow;
+  const length = wordLength;
+
+  setAnimatingRow(row);
+  setFlippingTiles(new Array(length).fill(false));
+
+  for (let i = 0; i < length; i++) {
+    const tileIndex = i;
+    const startDelay = tileIndex * 200; // stagger each tile
+
+    setTimeout(() => {
+      // Trigger the flip class
+      setFlippingTiles((prev) => {
+        const updated = [...prev];
+        if (updated.length === 0) return updated;
+        updated[tileIndex] = true;
+        return updated;
+      });
+
+      // Halfway through the flip (250ms), reveal colour
+      setTimeout(() => {
+        setCellStatuses((prev) => {
+          const updated = prev.map((r) => [...r]);
+          updated[row][tileIndex] = newStatuses[tileIndex];
+          return updated;
+        });
+      }, 250);
+
+      // If this is the last tile, schedule cleanup and win/loss after its animation finishes
+      if (tileIndex === length - 1) {
+      const animationFinishTime = 500; // animation duration
+      setTimeout(() => {
+        setAnimatingRow(null);
+        setFlippingTiles([]);
+
+        const guessWord = guess.join("").toUpperCase();
+        if (guessWord === solution) {
+          setGameOver(true);
+          setWinningRow(row);
+          setShowConfetti(true);
+          setTimeout(() => setShowConfetti(false), 3000); // auto-hide after 3 seconds
+          setMessage("You won! 🎉");
+          setExplanationText(puzzle.explanation);
+        } else if (row === 4) {
+          setGameOver(true);
+          setMessage("You lost! The word was " + puzzle.word + ".");
+          setExplanationText(puzzle.explanation);
+        } else {
+          setCurrentRow((prev) => prev + 1);
+          setCurrentCol(0);
+        }
+      }, animationFinishTime); // wait just for the last tile's flip to finish
+    } // wait longer than animation (500ms) to avoid visual glitch
+      
+    }, startDelay);
+  }
+}, [puzzle, currentCol, wordLength, board, currentRow, evaluateGuess, animatingRow]);
 
   // Keyboard listener
   useEffect(() => {
@@ -185,40 +243,52 @@ export default function Home() {
 
   // Helper for tile classes
   const getCellClasses = (row: number, col: number) => {
-    const status = cellStatuses[row]?.[col] || "";
-    let base =
-      "w-[clamp(2rem,8vw,3.5rem)] h-[clamp(2rem,8vw,3.5rem)] border-2 flex items-center justify-center text-[clamp(1rem,5vw,1.5rem)] font-bold uppercase ";
-    if (status === "correct") base += "bg-green-600 border-green-600 text-white";
-    else if (status === "present") base += "bg-yellow-500 border-yellow-500 text-white";
-    else if (status === "absent") base += "bg-gray-700 border-gray-500 text-white";
-    else base += "border-gray-600 bg-gray-800";
-    return base;
-  };
+  const status = cellStatuses[row]?.[col] || "";
+  let base =
+    "w-[clamp(2rem,8vw,3.5rem)] h-[clamp(2rem,8vw,3.5rem)] border-2 flex items-center justify-center text-[clamp(1rem,5vw,1.5rem)] font-bold uppercase ";
+  if (status === "correct") {
+    base += "bg-correct border-correct text-white";
+  } else if (status === "present") {
+    base += "bg-present border-present text-white";
+  } else if (status === "absent") {
+    base += "bg-absent border-absent text-white";
+  } else {
+    // Empty / not yet evaluated — use brand colours
+    base += "border-brand-mid bg-brand-dark text-brand-light";
+  }
+  return base;
+};
 
   // Helper for keyboard key classes (resized for mobile)
   const getKeyClasses = (key: string) => {
-    const status = keyStatuses[key] || "";
-    let base =
-      "h-10 sm:h-12 min-w-[2rem] sm:min-w-[2.8rem] rounded font-bold text-xs sm:text-sm mx-0.5 flex items-center justify-center select-none ";
-    if (status === "correct") base += "bg-green-600 text-white";
-    else if (status === "present") base += "bg-yellow-500 text-white";
-    else if (status === "absent") base += "bg-gray-700 text-white";
-    else base += "bg-gray-600 text-white active:bg-gray-500";
-    return base;
-  };
+  const status = keyStatuses[key] || "";
+  let base =
+    "h-10 sm:h-12 min-w-[2rem] sm:min-w-[2.8rem] rounded font-bold text-xs sm:text-sm mx-0.5 flex items-center justify-center select-none ";
+  if (status === "correct") {
+    base += "bg-correct text-white";
+  } else if (status === "present") {
+    base += "bg-present text-white";
+  } else if (status === "absent") {
+    base += "bg-absent text-white";
+  } else {
+    // Unpressed / default — use brand mid-grey with dark text
+    base += "bg-brand-mid text-white active:bg-brand-light";
+  }
+  return base;
+};
 
   // Render
   if (loading) {
     return (
-      <main className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
+      <main className="min-h-screen bg-brand-dark text-brand-light flex items-center justify-center">
         <p className="text-2xl">Loading puzzle...</p>
       </main>
     );
   }
   if (error) {
     return (
-      <main className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center">
-        <h1 className="text-3xl font-bold mb-4">MESdle</h1>
+      <main className="min-h-screen bg-brand-dark text-brand-light flex flex-col items-center justify-center">
+        <h1 className="text-3xl font-bold mb-4">Wordl3</h1>
         <p className="text-red-400 text-lg">{error}</p>
       </main>
     );
@@ -226,28 +296,40 @@ export default function Home() {
   if (!puzzle) return null;
 
   return (
-    <main className="min-h-dvh bg-gray-900 text-white flex flex-col items-center">
+    <>
+    {showTutorial && <Tutorial onClose={closeTutorial} />}
+    <main className={`min-h-dvh bg-brand-dark text-brand-light flex flex-col items-center ${entranceDone ? 'animate-fade-in-up' : 'opacity-0'}`}>
       <div className="flex-1 flex flex-col items-center justify-center w-full max-w-md px-2 pt-4">
-        <h1 className="text-3xl font-bold mb-3">MESdle</h1>
-        <div className="mb-3 text-lg text-gray-300 italic text-center">
+        <h1 className="text-3xl font-bold mb-3">Wordl3</h1>
+        <div className="mb-3 text-lg text-brand-peach italic text-center">
           {puzzle.hint}
         </div>
+      
 
         <div className="grid gap-1 sm:gap-1.5 mb-4">
           {board.map((row, rowIndex) => (
             <div key={rowIndex} className="flex gap-1 sm:gap-1.5">
               {row.map((cell, colIndex) => (
-                <div key={colIndex} className={getCellClasses(rowIndex, colIndex)}>
-                  {cell}
-                </div>
+                <div
+  key={colIndex}
+  className={
+    getCellClasses(rowIndex, colIndex) +
+    (animatingRow === rowIndex && flippingTiles[colIndex]
+      ? " tile-flip"
+      : "") +
+    (winningRow === rowIndex ? " tile-bounce" : "")
+  }
+>
+  {cell}
+</div>
               ))}
             </div>
           ))}
         </div>
 
-        {message && <div className="text-xl font-bold text-center mb-2">{message}</div>}
+        {message && <div className="text-xl font-bold text-center mb-2 text-brand-orange">{message}</div>}
         {explanationText && (
-          <div className="text-base text-gray-300 max-w-md text-center mb-3">
+          <div className="text-base text-brand-light max-w-md text-center mb-3">
             {explanationText}
           </div>
         )}
@@ -266,9 +348,10 @@ export default function Home() {
                     processKey(key === "BACKSPACE" ? "Backspace" : key === "ENTER" ? "Enter" : key)
                   }
                   className={
-                    (isSpecial ? "min-w-[3rem] sm:min-w-[4.5rem] px-1 " : "") +
-                    getKeyClasses(key)
-                  }
+                  (isSpecial ? "min-w-[3rem] sm:min-w-[4.5rem] px-1 " : "") +
+                  getKeyClasses(key) +
+                  " transition-transform active:scale-90"
+                }
                 >
                   {display}
                 </button>
@@ -278,5 +361,33 @@ export default function Home() {
         ))}
       </div>
     </main>
+{showConfetti && (
+  <div className="fixed inset-0 pointer-events-none z-50 overflow-hidden">
+    {Array.from({ length: 60 }).map((_, i) => (
+      <div
+        key={i}
+        className="confetti-piece"
+        style={{
+          left: `${Math.random() * 100}%`,
+          backgroundColor: [
+            '#6AAA64',
+            '#F5C518',
+            '#FF8C00',
+            '#FFC089',
+            '#A7A9AC',
+            '#0D3B66',
+            '#FFFFFF',
+          ][Math.floor(Math.random() * 7)],
+          animationDelay: `${Math.random() * 2.5}s`,
+          animationDuration: `${2.5 + Math.random() * 3}s`,
+          width: `${6 + Math.random() * 10}px`,
+          height: `${6 + Math.random() * 10}px`,
+          borderRadius: Math.random() > 0.5 ? '50%' : '0',
+        }}
+      />
+    ))}
+  </div>
+)}
+</>
   );
 }
