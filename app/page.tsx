@@ -40,6 +40,10 @@ export default function Home() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [entranceDone, setEntranceDone] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [employeeId, setEmployeeId] = useState<string>("");
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [employeeInput, setEmployeeInput] = useState("");
+  const [submissionStatus, setSubmissionStatus] = useState<string>("");
 
   // Fetch puzzle
   useEffect(() => {
@@ -81,6 +85,22 @@ export default function Home() {
     setShowTutorial(false);
     localStorage.setItem("wordl3_tutorial_seen", "true");
   };
+  // Change employee ID
+  const changeEmployeeId = () => {
+    localStorage.removeItem("wordl3_employee_id");
+    setEmployeeId("");
+    setLoggedIn(false);
+    setEmployeeInput("");
+    setSubmissionStatus("");
+  };
+  // Check localStorage for saved employee ID
+  useEffect(() => {
+    const savedId = localStorage.getItem("wordl3_employee_id");
+    if (savedId) {
+      setEmployeeId(savedId);
+      setLoggedIn(true);
+    }
+  }, []);
   // Reset board when puzzle changes
   useEffect(() => {
     if (!puzzle) return;
@@ -148,6 +168,40 @@ export default function Home() {
       handleEnter();
     }
   }, [gameOver, puzzle, currentCol, wordLength, currentRow, animatingRow]);
+
+  // Submit result to leaderboard
+    const submitToLeaderboard = useCallback(async (won: boolean, attemptsUsed: number | null) => {
+      if (!employeeId || !puzzle) return;
+      const today = new Date().toISOString().split("T")[0];
+
+      const { error } = await supabase
+        .from("leaderboard")
+        .upsert(
+          [
+            {
+              employee_id: employeeId,
+              puzzle_date: today,
+              attempts_used: attemptsUsed,
+              won: won,
+            },
+          ],
+          {
+            onConflict: 'EXACT_CONSTRAINT_NAME',   // e.g., 'unique_employee_date'
+            ignoreDuplicates: true,
+          }
+        );
+
+      // The Supabase client sometimes returns an empty error object {}.
+      // If there's no real error message, assume success.
+      if (error && Object.keys(error).length > 0) {
+        // Real error
+        setSubmissionStatus("Failed to submit score.");
+      } else {
+        // Success (either inserted or ignored duplicate)
+        setSubmissionStatus("Score submitted! 📊");
+      }
+      setTimeout(() => setSubmissionStatus(""), 3000);
+    }, [employeeId, puzzle]);
 
   // Handle Enter: update cellStatuses, then win/loss logic
 const handleEnter = useCallback(() => {
@@ -219,10 +273,14 @@ const handleEnter = useCallback(() => {
           setTimeout(() => setShowConfetti(false), 3000); // auto-hide after 3 seconds
           setMessage("You won! 🎉");
           setExplanationText(puzzle.explanation);
+          // Submit win to leaderboard (attempts_used = current row + 1)
+          submitToLeaderboard(true, row + 1);
         } else if (row === 4) {
           setGameOver(true);
           setMessage("You lost! The word was " + puzzle.word + ".");
           setExplanationText(puzzle.explanation);
+          // Submit loss to leaderboard (attempts_used = null for loss)
+          submitToLeaderboard(false, null);
         } else {
           setCurrentRow((prev) => prev + 1);
           setCurrentCol(0);
@@ -232,20 +290,21 @@ const handleEnter = useCallback(() => {
       
     }, startDelay);
   }
-}, [puzzle, currentCol, wordLength, board, currentRow, evaluateGuess, animatingRow]);
+}, [puzzle, currentCol, wordLength, board, currentRow, evaluateGuess, animatingRow, submitToLeaderboard]);
 
   // Keyboard listener
   useEffect(() => {
+    if (!loggedIn) return;   // <-- do not listen when not logged in
     const handler = (e: KeyboardEvent) => processKey(e.key);
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [processKey]); // processKey is memoized with its deps
+  }, [processKey, loggedIn]);   // <-- add loggedIn to deps
 
   // Helper for tile classes
   const getCellClasses = (row: number, col: number) => {
   const status = cellStatuses[row]?.[col] || "";
   let base =
-    "w-[clamp(2rem,8vw,3.5rem)] h-[clamp(2rem,8vw,3.5rem)] border-2 flex items-center justify-center text-[clamp(1rem,5vw,1.5rem)] font-bold uppercase ";
+    "w-[clamp(1rem,5vw,3.5rem)] h-[clamp(1rem,5vw,3.5rem)] border-2 flex items-center justify-center text-[clamp(0.75rem,4vw,1.5rem)] font-bold uppercase ";
   if (status === "correct") {
     base += "bg-correct border-correct text-white";
   } else if (status === "present") {
@@ -297,97 +356,162 @@ const handleEnter = useCallback(() => {
 
   return (
     <>
-    {showTutorial && <Tutorial onClose={closeTutorial} />}
-    <main className={`min-h-dvh bg-brand-dark text-brand-light flex flex-col items-center ${entranceDone ? 'animate-fade-in-up' : 'opacity-0'}`}>
-      <div className="flex-1 flex flex-col items-center justify-center w-full max-w-md px-2 pt-4">
-        <h1 className="text-3xl font-bold mb-3">Wordl3</h1>
-        <div className="mb-3 text-lg text-brand-peach italic text-center">
-          {puzzle.hint}
-        </div>
-      
+      {/* Employee ID login prompt */}
+      {!loggedIn && (
+        <main className="h-dvh bg-brand-dark text-brand-light flex items-center justify-center p-4 overflow-hidden">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const trimmed = employeeInput.trim();
+              if (trimmed) {
+                setEmployeeId(trimmed);
+                setLoggedIn(true);
+                localStorage.setItem("wordl3_employee_id", trimmed);
+              }
+            }}
+            className="bg-brand-dark border border-brand-mid rounded-xl p-6 max-w-sm w-full shadow-2xl animate-fade-in-up"
+          >
+            <h1 className="text-2xl font-bold mb-2 text-brand-orange">Wordl3</h1>
+            <p className="text-sm text-brand-light mb-4">
+              Enter your Employee ID to play and appear on the leaderboard.
+            </p>
+            <input
+              type="text"
+              value={employeeInput}
+              onChange={(e) => setEmployeeInput(e.target.value)}
+              placeholder="e.g., EMP001"
+              required
+              autoFocus
+              className="w-full p-3 mb-4 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center text-lg uppercase tracking-wider"
+            />
+            <button
+              type="submit"
+              className="w-full bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold py-2 rounded transition-colors"
+            >
+              Start Playing
+            </button>
+          </form>
+        </main>
+      )}
 
-        <div className="grid gap-1 sm:gap-1.5 mb-4">
-          {board.map((row, rowIndex) => (
-            <div key={rowIndex} className="flex gap-1 sm:gap-1.5">
-              {row.map((cell, colIndex) => (
-                <div
-  key={colIndex}
-  className={
-    getCellClasses(rowIndex, colIndex) +
-    (animatingRow === rowIndex && flippingTiles[colIndex]
-      ? " tile-flip"
-      : "") +
-    (winningRow === rowIndex ? " tile-bounce" : "")
-  }
->
-  {cell}
-</div>
-              ))}
+      {/* Tutorial (if not seen and logged in) */}
+      {loggedIn && showTutorial && <Tutorial onClose={closeTutorial} />}
+
+      {/* Main game (only when logged in) */}
+      {loggedIn && (
+        <main className={`h-dvh bg-brand-dark text-brand-light flex flex-col items-center overflow-hidden ${entranceDone ? 'animate-fade-in-up' : 'opacity-0'}`}>
+          {/* Change ID button in top right corner */}
+          <div className="absolute top-2 right-2 flex items-center gap-2">
+            <span className="text-xs sm:text-sm text-brand-peach hidden sm:inline">
+              {employeeId}
+            </span>
+            <button
+              onClick={changeEmployeeId}
+              className="text-xs sm:text-sm px-2 sm:px-3 py-1 bg-brand-mid hover:bg-brand-light text-brand-dark rounded transition-colors"
+            >
+              Change ID
+            </button>
+          </div>
+
+          <div className="flex-1 flex flex-col items-center justify-center w-full px-2 pt-4 overflow-y-auto">
+            <h1 className="text-3xl font-bold mb-3">Wordl3</h1>
+            <div className="mb-3 text-lg text-brand-peach italic text-center">
+              {puzzle.hint}
             </div>
+
+            {/* Board container with controlled width and overflow */}
+            <div className="mb-4 w-full flex justify-center overflow-x-auto">
+              <div className="grid gap-1 sm:gap-1.5">
+                {board.map((row, rowIndex) => (
+                  <div key={rowIndex} className="flex gap-1 sm:gap-1.5">
+                    {row.map((cell, colIndex) => (
+                      <div
+                        key={colIndex}
+                        className={
+                          getCellClasses(rowIndex, colIndex) +
+                          (animatingRow === rowIndex && flippingTiles[colIndex]
+                            ? " tile-flip"
+                            : "") +
+                          (winningRow === rowIndex ? " tile-bounce" : "")
+                        }
+                      >
+                        {cell}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {message && <div className="text-xl font-bold text-center mb-2 text-brand-orange">{message}</div>}
+            {explanationText && (
+              <div className="text-base text-brand-light max-w-md text-center mb-3">
+                {explanationText}
+              </div>
+            )}
+            {submissionStatus && (
+              <div className="text-base font-semibold text-center mb-2 text-brand-peach">
+                {submissionStatus}
+              </div>
+            )}
+          </div>
+
+          <div className="w-full max-w-lg pb-4 px-1 flex-shrink-0">
+            {KEYBOARD_ROWS.map((row, i) => (
+              <div key={i} className="flex justify-center my-0.5 sm:my-1">
+                {row.map((key) => {
+                  const display = key === "BACKSPACE" ? "←" : key === "ENTER" ? "↵" : key;
+                  const isSpecial = key === "BACKSPACE" || key === "ENTER";
+                  return (
+                    <button
+                      key={key}
+                      onClick={() =>
+                        processKey(key === "BACKSPACE" ? "Backspace" : key === "ENTER" ? "Enter" : key)
+                      }
+                      className={
+                        (isSpecial ? "min-w-[3rem] sm:min-w-[4.5rem] px-1 " : "") +
+                        getKeyClasses(key) +
+                        " transition-transform active:scale-90"
+                      }
+                    >
+                      {display}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </main>
+      )}
+
+      {/* Confetti (only when logged in and game won) */}
+      {loggedIn && showConfetti && (
+        <div className="fixed inset-0 pointer-events-none z-50 overflow-hidden">
+          {Array.from({ length: 60 }).map((_, i) => (
+            <div
+              key={i}
+              className="confetti-piece"
+              style={{
+                left: `${Math.random() * 100}%`,
+                backgroundColor: [
+                  '#6AAA64',
+                  '#F5C518',
+                  '#FF8C00',
+                  '#FFC089',
+                  '#A7A9AC',
+                  '#0D3B66',
+                  '#FFFFFF',
+                ][Math.floor(Math.random() * 7)],
+                animationDelay: `${Math.random() * 2.5}s`,
+                animationDuration: `${2.5 + Math.random() * 3}s`,
+                width: `${6 + Math.random() * 10}px`,
+                height: `${6 + Math.random() * 10}px`,
+                borderRadius: Math.random() > 0.5 ? '50%' : '0',
+              }}
+            />
           ))}
         </div>
-
-        {message && <div className="text-xl font-bold text-center mb-2 text-brand-orange">{message}</div>}
-        {explanationText && (
-          <div className="text-base text-brand-light max-w-md text-center mb-3">
-            {explanationText}
-          </div>
-        )}
-      </div>
-
-      <div className="w-full max-w-lg pb-4 px-1 mt-2">
-        {KEYBOARD_ROWS.map((row, i) => (
-          <div key={i} className="flex justify-center my-0.5 sm:my-1">
-            {row.map((key) => {
-              const display = key === "BACKSPACE" ? "←" : key === "ENTER" ? "↵" : key;
-              const isSpecial = key === "BACKSPACE" || key === "ENTER";
-              return (
-                <button
-                  key={key}
-                  onClick={() =>
-                    processKey(key === "BACKSPACE" ? "Backspace" : key === "ENTER" ? "Enter" : key)
-                  }
-                  className={
-                  (isSpecial ? "min-w-[3rem] sm:min-w-[4.5rem] px-1 " : "") +
-                  getKeyClasses(key) +
-                  " transition-transform active:scale-90"
-                }
-                >
-                  {display}
-                </button>
-              );
-            })}
-          </div>
-        ))}
-      </div>
-    </main>
-{showConfetti && (
-  <div className="fixed inset-0 pointer-events-none z-50 overflow-hidden">
-    {Array.from({ length: 60 }).map((_, i) => (
-      <div
-        key={i}
-        className="confetti-piece"
-        style={{
-          left: `${Math.random() * 100}%`,
-          backgroundColor: [
-            '#6AAA64',
-            '#F5C518',
-            '#FF8C00',
-            '#FFC089',
-            '#A7A9AC',
-            '#0D3B66',
-            '#FFFFFF',
-          ][Math.floor(Math.random() * 7)],
-          animationDelay: `${Math.random() * 2.5}s`,
-          animationDuration: `${2.5 + Math.random() * 3}s`,
-          width: `${6 + Math.random() * 10}px`,
-          height: `${6 + Math.random() * 10}px`,
-          borderRadius: Math.random() > 0.5 ? '50%' : '0',
-        }}
-      />
-    ))}
-  </div>
-)}
-</>
+      )}
+    </>
   );
 }
