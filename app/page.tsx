@@ -44,6 +44,10 @@ export default function Home() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [employeeInput, setEmployeeInput] = useState("");
   const [submissionStatus, setSubmissionStatus] = useState<string>("");
+  const [showShare, setShowShare] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [isSignUp, setIsSignUp] = useState(false); // true when ID not found
+  const [loginError, setLoginError] = useState("");
 
   // Fetch puzzle
   useEffect(() => {
@@ -74,17 +78,20 @@ export default function Home() {
     }
     fetchPuzzle();
   }, []);
+
   // Show tutorial only if not previously seen
-    useEffect(() => {
-        const seenTutorial = localStorage.getItem("wordl3_tutorial_seen");
-        if (!seenTutorial) {
-          setShowTutorial(true);
-        }
-      }, []);
-      const closeTutorial = () => {
+  useEffect(() => {
+    const seenTutorial = localStorage.getItem("wordl3_tutorial_seen");
+    if (!seenTutorial) {
+      setShowTutorial(true);
+    }
+  }, []);
+
+  const closeTutorial = () => {
     setShowTutorial(false);
     localStorage.setItem("wordl3_tutorial_seen", "true");
   };
+
   // Change employee ID
   const changeEmployeeId = () => {
     localStorage.removeItem("wordl3_employee_id");
@@ -93,6 +100,7 @@ export default function Home() {
     setEmployeeInput("");
     setSubmissionStatus("");
   };
+
   // Check localStorage for saved employee ID
   useEffect(() => {
     const savedId = localStorage.getItem("wordl3_employee_id");
@@ -101,6 +109,7 @@ export default function Home() {
       setLoggedIn(true);
     }
   }, []);
+
   // Reset board when puzzle changes
   useEffect(() => {
     if (!puzzle) return;
@@ -119,6 +128,54 @@ export default function Home() {
     setEntranceDone(false);
     setTimeout(() => setEntranceDone(true), 50);
   }, [puzzle]);
+
+  // ─── STEP 2: Load saved game state when puzzle and login are both ready ───
+  // Load saved game state when puzzle, loggedIn, or employeeId changes
+useEffect(() => {
+  if (!puzzle || !loggedIn || !employeeId) return;
+
+  const len = puzzle.word.length;
+  const emptyBoard = Array.from({ length: 5 }, () => Array(len).fill(""));
+
+  // 1. Immediately reset to an empty board for the new user
+  setBoard(emptyBoard);
+  setCellStatuses(Array.from({ length: 5 }, () => Array(len).fill("")));
+  setCurrentRow(0);
+  setCurrentCol(0);
+  setGameOver(false);
+  setKeyStatuses({});
+  setMessage("");
+  setExplanationText("");
+  setAnimatingRow(null);
+  setFlippingTiles([]);
+  setWinningRow(null);
+  setShowConfetti(false);
+  setShowShare(false);
+
+  // 2. Try to load saved state for this employee + today
+  async function loadSavedState() {
+    const todayStr = new Date().toISOString().split("T")[0];
+    const { data: savedState } = await supabase
+      .from("game_state")
+      .select("*")
+      .eq("employee_id", employeeId)
+      .eq("puzzle_date", todayStr)
+      .maybeSingle();
+
+    if (savedState && savedState.board_state) {
+      setBoard(savedState.board_state);
+      setCellStatuses(savedState.cell_statuses);
+      setCurrentRow(savedState.current_row);
+      setCurrentCol(savedState.current_col);
+      setKeyStatuses(savedState.key_statuses || {});
+      setGameOver(savedState.game_over);
+      setMessage(savedState.message || "");
+      setExplanationText(savedState.explanation || "");
+    }
+  }
+
+  loadSavedState();
+}, [puzzle, loggedIn, employeeId]);
 
   // Evaluation logic (unchanged)
   const evaluateGuess = (guess: string[], solution: string): CellStatus[] => {
@@ -147,158 +204,262 @@ export default function Home() {
   };
 
   // Key processing
-  const processKey = useCallback((key: string) => {
-    if (gameOver || !puzzle) return;
-    if (animatingRow !== null) return;   // animation in progress, ignore input
-    if (/^[a-zA-Z0-9]$/.test(key) && currentCol < wordLength) {
-      setBoard((prev) => {
-        const newBoard = prev.map((row) => [...row]);
-        newBoard[currentRow][currentCol] = key.toUpperCase();
-        return newBoard;
-      });
-      setCurrentCol((prev) => prev + 1);
-    } else if (key === "Backspace" && currentCol > 0) {
-      setBoard((prev) => {
-        const newBoard = prev.map((row) => [...row]);
-        newBoard[currentRow][currentCol - 1] = "";
-        return newBoard;
-      });
-      setCurrentCol((prev) => prev - 1);
-    } else if (key === "Enter") {
-      handleEnter();
+  const processKey = useCallback(
+    (key: string) => {
+      if (gameOver || !puzzle) return;
+      if (animatingRow !== null) return;
+      if (/^[a-zA-Z0-9]$/.test(key) && currentCol < wordLength) {
+        setBoard((prev) => {
+          const newBoard = prev.map((row) => [...row]);
+          newBoard[currentRow][currentCol] = key.toUpperCase();
+          return newBoard;
+        });
+        setCurrentCol((prev) => prev + 1);
+      } else if (key === "Backspace" && currentCol > 0) {
+        setBoard((prev) => {
+          const newBoard = prev.map((row) => [...row]);
+          newBoard[currentRow][currentCol - 1] = "";
+          return newBoard;
+        });
+        setCurrentCol((prev) => prev - 1);
+      } else if (key === "Enter") {
+        handleEnter();
+      }
+    },
+    [gameOver, puzzle, currentCol, wordLength, currentRow, animatingRow]
+  );
+
+  // ─── STEP 1a: saveGameState (used by both auto-save and post-guess save) ───
+  const saveGameState = useCallback(async () => {
+    if (!employeeId || !puzzle) return;
+    const today = new Date().toISOString().split("T")[0];
+
+    const { error: upsertError } = await supabase
+      .from("game_state")
+      .upsert(
+        {
+          employee_id: employeeId,
+          puzzle_date: today,
+          board_state: board,
+          cell_statuses: cellStatuses,
+          current_row: currentRow,
+          current_col: currentCol,
+          key_statuses: keyStatuses,
+          game_over: gameOver,
+          message: message,
+          explanation: explanationText,
+          submitted: false,
+        },
+        { onConflict: "employee_id,puzzle_date" }
+      );
+
+    if (upsertError && Object.keys(upsertError).length > 0) {
+      console.error("Failed to save game state:", upsertError);
     }
-  }, [gameOver, puzzle, currentCol, wordLength, currentRow, animatingRow]);
+  }, [
+    employeeId,
+    puzzle,
+    board,
+    cellStatuses,
+    currentRow,
+    currentCol,
+    keyStatuses,
+    gameOver,
+    message,
+    explanationText,
+  ]);
+
+  // ─── STEP 1b: Auto-save on every keystroke (debounced 800ms) ───
+  useEffect(() => {
+    if (!loggedIn || !puzzle || gameOver) return;
+    const timer = setTimeout(() => {
+      saveGameState();
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [board, currentCol, loggedIn, puzzle, gameOver, saveGameState]);
 
   // Submit result to leaderboard
-    const submitToLeaderboard = useCallback(async (won: boolean, attemptsUsed: number | null) => {
+  const submitToLeaderboard = useCallback(
+    async (won: boolean, attemptsUsed: number | null) => {
       if (!employeeId || !puzzle) return;
       const today = new Date().toISOString().split("T")[0];
 
-      const { error } = await supabase
+      const { error: insertError } = await supabase
         .from("leaderboard")
-        .upsert(
-          [
-            {
-              employee_id: employeeId,
-              puzzle_date: today,
-              attempts_used: attemptsUsed,
-              won: won,
-            },
-          ],
+        .insert([
           {
-            onConflict: 'EXACT_CONSTRAINT_NAME',   // e.g., 'unique_employee_date'
-            ignoreDuplicates: true,
-          }
-        );
+            employee_id: employeeId,
+            puzzle_date: today,
+            attempts_used: attemptsUsed,
+            won: won,
+          },
+        ]);
 
-      // The Supabase client sometimes returns an empty error object {}.
-      // If there's no real error message, assume success.
-      if (error && Object.keys(error).length > 0) {
-        // Real error
-        setSubmissionStatus("Failed to submit score.");
+      if (insertError) {
+        if (insertError.code === "23505") {
+          setSubmissionStatus("Score already submitted for today!");
+        } else {
+          console.error("Leaderboard insert error:", insertError);
+          setSubmissionStatus("Failed to submit score.");
+        }
       } else {
-        // Success (either inserted or ignored duplicate)
         setSubmissionStatus("Score submitted! 📊");
+
+        // ─── STEP 3: Clear saved game state after successful leaderboard submission ───
+        await supabase
+          .from("game_state")
+          .delete()
+          .eq("employee_id", employeeId)
+          .eq("puzzle_date", today);
       }
-      setTimeout(() => setSubmissionStatus(""), 3000);
-    }, [employeeId, puzzle]);
+
+      setTimeout(() => setSubmissionStatus(""), 4000);
+    },
+    [employeeId, puzzle]
+  );
+
+  const handleShare = useCallback(async () => {
+    if (!puzzle) return;
+
+    // Only include rows that have been evaluated
+    const evaluatedRows: string[] = [];
+
+    for (let r = 0; r < 5; r++) {
+      const row = cellStatuses[r];
+      // If row exists and has any non-empty status, consider it evaluated
+      if (row && row.some(status => status !== "")) {
+        const emojiRow = row
+          .map(status => {
+            if (status === "correct") return "🟩";
+            if (status === "present") return "🟨";
+            return "⬛"; // absent or empty (should be absent if evaluated)
+          })
+          .join("");
+        evaluatedRows.push(emojiRow);
+      }
+    }
+
+    const attemptsUsed = evaluatedRows.length;
+    const won = message.includes("won");
+
+    const shareText =
+      `Wordl3 ${puzzle.date}\n` +
+      `${won ? "✅" : "❌"} ${attemptsUsed}/5\n\n` +
+      evaluatedRows.join("\n") +
+      `\n\nhttps://wordl3-amber.vercel.app/`; // adjust to your actual URL
+
+    try {
+      await navigator.clipboard.writeText(shareText);
+      setSubmissionStatus("Copied to clipboard! 📋");
+      setTimeout(() => setSubmissionStatus(""), 2000);
+    } catch {
+      setSubmissionStatus("Failed to copy.");
+      setTimeout(() => setSubmissionStatus(""), 2000);
+    }
+  }, [puzzle, cellStatuses, message]);
 
   // Handle Enter: update cellStatuses, then win/loss logic
-const handleEnter = useCallback(() => {
-  if (!puzzle || currentCol !== wordLength) return;
-  if (animatingRow !== null) return; // already animating – safety lock
+  const handleEnter = useCallback(() => {
+    if (!puzzle || currentCol !== wordLength) return;
+    if (animatingRow !== null) return;
 
-  const guess = board[currentRow].map((l) => l.toUpperCase());
-  const solution = puzzle.word.toUpperCase();
-  const newStatuses = evaluateGuess(guess, solution);
+    const guess = board[currentRow].map((l) => l.toUpperCase());
+    const solution = puzzle.word.toUpperCase();
+    const newStatuses = evaluateGuess(guess, solution);
 
-  // Update keyboard colours immediately (they don't flip)
-  setKeyStatuses((prev) => {
-    const updated = { ...prev };
-    guess.forEach((letter, i) => {
-      const currentBest = updated[letter] || "";
-      const newStatus = newStatuses[i];
-      if (
-        newStatus === "correct" ||
-        (newStatus === "present" && currentBest !== "correct") ||
-        (newStatus === "absent" && !currentBest)
-      ) {
-        updated[letter] = newStatus;
-      }
-    });
-    return updated;
-  });
-
-  // Begin flip animation
-  const row = currentRow;
-  const length = wordLength;
-
-  setAnimatingRow(row);
-  setFlippingTiles(new Array(length).fill(false));
-
-  for (let i = 0; i < length; i++) {
-    const tileIndex = i;
-    const startDelay = tileIndex * 200; // stagger each tile
-
-    setTimeout(() => {
-      // Trigger the flip class
-      setFlippingTiles((prev) => {
-        const updated = [...prev];
-        if (updated.length === 0) return updated;
-        updated[tileIndex] = true;
-        return updated;
+    setKeyStatuses((prev) => {
+      const updated = { ...prev };
+      guess.forEach((letter, i) => {
+        const currentBest = updated[letter] || "";
+        const newStatus = newStatuses[i];
+        if (
+          newStatus === "correct" ||
+          (newStatus === "present" && currentBest !== "correct") ||
+          (newStatus === "absent" && !currentBest)
+        ) {
+          updated[letter] = newStatus;
+        }
       });
+      return updated;
+    });
 
-      // Halfway through the flip (250ms), reveal colour
+    const row = currentRow;
+    const length = wordLength;
+
+    setAnimatingRow(row);
+    setFlippingTiles(new Array(length).fill(false));
+
+    for (let i = 0; i < length; i++) {
+      const tileIndex = i;
+      const startDelay = tileIndex * 200;
+
       setTimeout(() => {
-        setCellStatuses((prev) => {
-          const updated = prev.map((r) => [...r]);
-          updated[row][tileIndex] = newStatuses[tileIndex];
+        setFlippingTiles((prev) => {
+          const updated = [...prev];
+          if (updated.length === 0) return updated;
+          updated[tileIndex] = true;
           return updated;
         });
-      }, 250);
 
-      // If this is the last tile, schedule cleanup and win/loss after its animation finishes
-      if (tileIndex === length - 1) {
-      const animationFinishTime = 500; // animation duration
-      setTimeout(() => {
-        setAnimatingRow(null);
-        setFlippingTiles([]);
+        setTimeout(() => {
+          setCellStatuses((prev) => {
+            const updated = prev.map((r) => [...r]);
+            updated[row][tileIndex] = newStatuses[tileIndex];
+            return updated;
+          });
+        }, 250);
 
-        const guessWord = guess.join("").toUpperCase();
-        if (guessWord === solution) {
-          setGameOver(true);
-          setWinningRow(row);
-          setShowConfetti(true);
-          setTimeout(() => setShowConfetti(false), 3000); // auto-hide after 3 seconds
-          setMessage("You won! 🎉");
-          setExplanationText(puzzle.explanation);
-          // Submit win to leaderboard (attempts_used = current row + 1)
-          submitToLeaderboard(true, row + 1);
-        } else if (row === 4) {
-          setGameOver(true);
-          setMessage("You lost! The word was " + puzzle.word + ".");
-          setExplanationText(puzzle.explanation);
-          // Submit loss to leaderboard (attempts_used = null for loss)
-          submitToLeaderboard(false, null);
-        } else {
-          setCurrentRow((prev) => prev + 1);
-          setCurrentCol(0);
+        if (tileIndex === length - 1) {
+          const animationFinishTime = 500;
+          setTimeout(() => {
+            setAnimatingRow(null);
+            setFlippingTiles([]);
+
+            const guessWord = guess.join("").toUpperCase();
+            if (guessWord === solution) {
+              setGameOver(true);
+              setWinningRow(row);
+              setShowConfetti(true);
+              setTimeout(() => setShowConfetti(false), 3000);
+              setMessage("You won! 🎉");
+              setExplanationText(puzzle.explanation);
+              submitToLeaderboard(true, row + 1);
+              setShowShare(true);
+            } else if (row === 4) {
+              setGameOver(true);
+              setMessage("You lost! The word was " + puzzle.word + ".");
+              setExplanationText(puzzle.explanation);
+              submitToLeaderboard(false, null);
+              setShowShare(true);
+            } else {
+              setCurrentRow((prev) => prev + 1);
+              setCurrentCol(0);
+            }
+            saveGameState();
+          }, animationFinishTime);
         }
-      }, animationFinishTime); // wait just for the last tile's flip to finish
-    } // wait longer than animation (500ms) to avoid visual glitch
-      
-    }, startDelay);
-  }
-}, [puzzle, currentCol, wordLength, board, currentRow, evaluateGuess, animatingRow, submitToLeaderboard]);
+      }, startDelay);
+    }
+  }, [
+    puzzle,
+    currentCol,
+    wordLength,
+    board,
+    currentRow,
+    evaluateGuess,
+    animatingRow,
+    submitToLeaderboard,
+    saveGameState,
+  ]);
 
   // Keyboard listener
   useEffect(() => {
-    if (!loggedIn) return;   // <-- do not listen when not logged in
+    if (!loggedIn) return;
     const handler = (e: KeyboardEvent) => processKey(e.key);
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [processKey, loggedIn]);   // <-- add loggedIn to deps
+  }, [processKey, loggedIn]);
+
   // Compute tile size based on word length
   const getTileSize = () => {
     if (!puzzle) return "3.5rem";
@@ -308,8 +469,9 @@ const handleEnter = useCallback(() => {
     if (len <= 7) return "2.5rem";
     if (len <= 10) return "2rem";
     if (len <= 12) return "1.75rem";
-    return "1.5rem"; // 13–15 letters
+    return "1.5rem";
   };
+
   // Helper for tile classes
   const getCellClasses = (row: number, col: number) => {
     const status = cellStatuses[row]?.[col] || "";
@@ -327,23 +489,22 @@ const handleEnter = useCallback(() => {
     return base;
   };
 
-  // Helper for keyboard key classes (resized for mobile)
+  // Helper for keyboard key classes
   const getKeyClasses = (key: string) => {
-  const status = keyStatuses[key] || "";
-  let base =
-    "h-10 sm:h-12 min-w-[2rem] sm:min-w-[2.8rem] rounded font-bold text-xs sm:text-sm mx-0.5 flex items-center justify-center select-none ";
-  if (status === "correct") {
-    base += "bg-correct text-white";
-  } else if (status === "present") {
-    base += "bg-present text-white";
-  } else if (status === "absent") {
-    base += "bg-absent text-white";
-  } else {
-    // Unpressed / default — use brand mid-grey with dark text
-    base += "bg-brand-mid text-white active:bg-brand-light";
-  }
-  return base;
-};
+    const status = keyStatuses[key] || "";
+    let base =
+      "h-10 sm:h-12 min-w-[2rem] sm:min-w-[2.8rem] rounded font-bold text-xs sm:text-sm mx-0.5 flex items-center justify-center select-none ";
+    if (status === "correct") {
+      base += "bg-correct text-white";
+    } else if (status === "present") {
+      base += "bg-present text-white";
+    } else if (status === "absent") {
+      base += "bg-absent text-white";
+    } else {
+      base += "bg-brand-mid text-white active:bg-brand-light";
+    }
+    return base;
+  };
 
   // Render
   if (loading) {
@@ -366,49 +527,150 @@ const handleEnter = useCallback(() => {
   return (
     <>
       {/* Employee ID login prompt */}
-      {!loggedIn && (
-        <main className="h-dvh bg-brand-dark text-brand-light flex items-center justify-center p-4 overflow-hidden">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const trimmed = employeeInput.trim();
-              if (trimmed) {
-                setEmployeeId(trimmed);
-                setLoggedIn(true);
-                localStorage.setItem("wordl3_employee_id", trimmed);
-              }
-            }}
-            className="bg-brand-dark border border-brand-mid rounded-xl p-6 max-w-sm w-full shadow-2xl animate-fade-in-up"
-          >
-            <h1 className="text-2xl font-bold mb-2 text-brand-orange">Wordl3</h1>
-            <p className="text-sm text-brand-light mb-4">
-              Enter your Employee ID to play and appear on the leaderboard.
-            </p>
-            <input
-              type="text"
-              value={employeeInput}
-              onChange={(e) => setEmployeeInput(e.target.value)}
-              placeholder="e.g., EMP001"
-              required
-              autoFocus
-              className="w-full p-3 mb-4 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center text-lg uppercase tracking-wider"
-            />
-            <button
-              type="submit"
-              className="w-full bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold py-2 rounded transition-colors"
-            >
-              Start Playing
-            </button>
-          </form>
-        </main>
-      )}
+    {!loggedIn && (
+      <main className="h-dvh bg-brand-dark text-brand-light flex items-center justify-center p-4 overflow-hidden">
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setLoginError("");
+            const trimmedId = employeeInput.trim();
+            if (!trimmedId) return;
+
+            // Check if user exists
+            const { data: existingUser, error: fetchError } = await supabase
+              .from("users")
+              .select("employee_id")
+              .eq("employee_id", trimmedId)
+              .maybeSingle();
+
+            if (fetchError) {
+              setLoginError("Error checking account.");
+              return;
+            }
+
+            if (!existingUser) {
+              // New user → show sign-up (ask for password creation)
+              setIsSignUp(true);
+              return;
+            }
+
+            // Existing user → verify password
+            const { data: user, error: loginErr } = await supabase
+              .from("users")
+              .select("password")
+              .eq("employee_id", trimmedId)
+              .single();
+
+            if (loginErr || !user) {
+              setLoginError("Account error.");
+              return;
+            }
+
+            if (user.password !== passwordInput) {
+              setLoginError("Incorrect password.");
+              return;
+            }
+
+            // Success
+            setEmployeeId(trimmedId);
+            setLoggedIn(true);
+            localStorage.setItem("wordl3_employee_id", trimmedId);
+            setPasswordInput("");
+          }}
+          className="bg-brand-dark border border-brand-mid rounded-xl p-6 max-w-sm w-full shadow-2xl animate-fade-in-up"
+        >
+          <h1 className="text-2xl font-bold mb-2 text-brand-orange">Wordl3</h1>
+
+          {!isSignUp ? (
+            <>
+              <p className="text-sm text-brand-light mb-4">
+                Enter your Employee ID to play.
+              </p>
+              <input
+                type="text"
+                value={employeeInput}
+                onChange={(e) => setEmployeeInput(e.target.value)}
+                placeholder="e.g., EMP001"
+                required
+                autoFocus
+                className="w-full p-3 mb-3 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center text-lg tracking-wider"
+              />
+              <input
+                type="password"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                placeholder="Password"
+                required
+                className="w-full p-3 mb-4 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center"
+              />
+              {loginError && (
+                <p className="text-red-400 text-sm mb-2 text-center">{loginError}</p>
+              )}
+              <button
+                type="submit"
+                className="w-full bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold py-2 rounded transition-colors"
+              >
+                Log In
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-brand-light mb-2">
+                New account for <span className="font-bold">{employeeInput.trim()}</span>
+              </p>
+              <p className="text-xs text-brand-mid mb-4">
+                Create a password to register.
+              </p>
+              <input
+                type="password"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                placeholder="Choose a password"
+                required
+                autoFocus
+                className="w-full p-3 mb-4 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center"
+              />
+              {loginError && (
+                <p className="text-red-400 text-sm mb-2 text-center">{loginError}</p>
+              )}
+              <button
+                type="button"
+                onClick={async () => {
+                  const trimmedId = employeeInput.trim();
+                  if (!passwordInput) return;
+                  const { error: insertErr } = await supabase
+                    .from("users")
+                    .insert({ employee_id: trimmedId, password: passwordInput });
+                  if (insertErr) {
+                    setLoginError("Could not create account.");
+                    return;
+                  }
+                  setEmployeeId(trimmedId);
+                  setLoggedIn(true);
+                  localStorage.setItem("wordl3_employee_id", trimmedId);
+                  setPasswordInput("");
+                  setIsSignUp(false);
+                }}
+                className="w-full bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold py-2 rounded transition-colors"
+              >
+                Create Account & Play
+              </button>
+            </>
+          )}
+        </form>
+      </main>
+    )}
 
       {/* Tutorial (if not seen and logged in) */}
       {loggedIn && showTutorial && <Tutorial onClose={closeTutorial} />}
 
       {/* Main game (only when logged in) */}
       {loggedIn && (
-        <main className={`h-dvh bg-brand-dark text-brand-light flex flex-col items-center overflow-hidden ${entranceDone ? 'animate-fade-in-up' : 'opacity-0'}`}>
+        <main
+          className={`h-dvh bg-brand-dark text-brand-light flex flex-col items-center overflow-hidden ${
+            entranceDone ? "animate-fade-in-up" : "opacity-0"
+          }`}
+        >
           {/* Change ID button in top right corner */}
           <div className="absolute top-2 right-2 flex items-center gap-2">
             <a
@@ -459,11 +721,23 @@ const handleEnter = useCallback(() => {
               </div>
             </div>
 
-            {message && <div className="text-xl font-bold text-center mb-2 text-brand-orange">{message}</div>}
+            {message && (
+              <div className="text-xl font-bold text-center mb-2 text-brand-orange">
+                {message}
+              </div>
+            )}
             {explanationText && (
               <div className="text-base text-brand-light max-w-md text-center mb-3">
                 {explanationText}
               </div>
+            )}
+            {showShare && (
+              <button
+                onClick={handleShare}
+                className="mt-4 px-6 py-2 bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold rounded transition-colors"
+              >
+                📤 Share Result
+              </button>
             )}
             {submissionStatus && (
               <div className="text-base font-semibold text-center mb-2 text-brand-peach">
@@ -476,13 +750,20 @@ const handleEnter = useCallback(() => {
             {KEYBOARD_ROWS.map((row, i) => (
               <div key={i} className="flex justify-center my-0.5 sm:my-1">
                 {row.map((key) => {
-                  const display = key === "BACKSPACE" ? "←" : key === "ENTER" ? "↵" : key;
+                  const display =
+                    key === "BACKSPACE" ? "←" : key === "ENTER" ? "↵" : key;
                   const isSpecial = key === "BACKSPACE" || key === "ENTER";
                   return (
                     <button
                       key={key}
                       onClick={() =>
-                        processKey(key === "BACKSPACE" ? "Backspace" : key === "ENTER" ? "Enter" : key)
+                        processKey(
+                          key === "BACKSPACE"
+                            ? "Backspace"
+                            : key === "ENTER"
+                            ? "Enter"
+                            : key
+                        )
                       }
                       className={
                         (isSpecial ? "min-w-[3rem] sm:min-w-[4.5rem] px-1 " : "") +
@@ -510,19 +791,19 @@ const handleEnter = useCallback(() => {
               style={{
                 left: `${Math.random() * 100}%`,
                 backgroundColor: [
-                  '#6AAA64',
-                  '#F5C518',
-                  '#FF8C00',
-                  '#FFC089',
-                  '#A7A9AC',
-                  '#0D3B66',
-                  '#FFFFFF',
+                  "#6AAA64",
+                  "#F5C518",
+                  "#FF8C00",
+                  "#FFC089",
+                  "#A7A9AC",
+                  "#0D3B66",
+                  "#FFFFFF",
                 ][Math.floor(Math.random() * 7)],
                 animationDelay: `${Math.random() * 2.5}s`,
                 animationDuration: `${2.5 + Math.random() * 3}s`,
                 width: `${6 + Math.random() * 10}px`,
                 height: `${6 + Math.random() * 10}px`,
-                borderRadius: Math.random() > 0.5 ? '50%' : '0',
+                borderRadius: Math.random() > 0.5 ? "50%" : "0",
               }}
             />
           ))}
