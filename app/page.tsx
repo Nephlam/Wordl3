@@ -299,24 +299,33 @@ const handleEnter = useCallback(() => {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [processKey, loggedIn]);   // <-- add loggedIn to deps
-
+  // Compute tile size based on word length
+  const getTileSize = () => {
+    if (!puzzle) return "3.5rem";
+    const len = puzzle.word.length;
+    if (len <= 3) return "3.5rem";
+    if (len <= 5) return "3rem";
+    if (len <= 7) return "2.5rem";
+    if (len <= 10) return "2rem";
+    if (len <= 12) return "1.75rem";
+    return "1.5rem"; // 13–15 letters
+  };
   // Helper for tile classes
   const getCellClasses = (row: number, col: number) => {
-  const status = cellStatuses[row]?.[col] || "";
-  let base =
-    "w-[clamp(1rem,5vw,3.5rem)] h-[clamp(1rem,5vw,3.5rem)] border-2 flex items-center justify-center text-[clamp(0.75rem,4vw,1.5rem)] font-bold uppercase ";
-  if (status === "correct") {
-    base += "bg-correct border-correct text-white";
-  } else if (status === "present") {
-    base += "bg-present border-present text-white";
-  } else if (status === "absent") {
-    base += "bg-absent border-absent text-white";
-  } else {
-    // Empty / not yet evaluated — use brand colours
-    base += "border-brand-mid bg-brand-dark text-brand-light";
-  }
-  return base;
-};
+    const status = cellStatuses[row]?.[col] || "";
+    const tileSize = getTileSize();
+    let base = `w-[${tileSize}] h-[${tileSize}] border-2 flex items-center justify-center text-[clamp(0.75rem,4vw,1.5rem)] font-bold uppercase `;
+    if (status === "correct") {
+      base += "bg-correct border-correct text-white";
+    } else if (status === "present") {
+      base += "bg-present border-present text-white";
+    } else if (status === "absent") {
+      base += "bg-absent border-absent text-white";
+    } else {
+      base += "border-brand-mid bg-brand-dark text-brand-light";
+    }
+    return base;
+  };
 
   // Helper for keyboard key classes (resized for mobile)
   const getKeyClasses = (key: string) => {
@@ -402,6 +411,12 @@ const handleEnter = useCallback(() => {
         <main className={`h-dvh bg-brand-dark text-brand-light flex flex-col items-center overflow-hidden ${entranceDone ? 'animate-fade-in-up' : 'opacity-0'}`}>
           {/* Change ID button in top right corner */}
           <div className="absolute top-2 right-2 flex items-center gap-2">
+            <a
+              href="/leaderboard"
+              className="text-xs sm:text-sm px-2 sm:px-3 py-1 bg-brand-orange hover:bg-brand-peach text-brand-dark rounded transition-colors font-semibold"
+            >
+              🏆 Leaderboard
+            </a>
             <span className="text-xs sm:text-sm text-brand-peach hidden sm:inline">
               {employeeId}
             </span>
@@ -434,6 +449,7 @@ const handleEnter = useCallback(() => {
                             : "") +
                           (winningRow === rowIndex ? " tile-bounce" : "")
                         }
+                        style={{ width: getTileSize(), height: getTileSize() }}
                       >
                         {cell}
                       </div>
