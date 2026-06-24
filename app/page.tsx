@@ -44,7 +44,10 @@ export default function Home() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [employeeInput, setEmployeeInput] = useState("");
   const [submissionStatus, setSubmissionStatus] = useState<string>("");
+  const [poppedCell, setPoppedCell] = useState<{ row: number; col: number } | null>(null);
   const [showShare, setShowShare] = useState(false);
+  const [streak, setStreak] = useState(0);
+  const [streakLoaded, setStreakLoaded] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [isSignUp, setIsSignUp] = useState(false); // true when ID not found
   const [loginError, setLoginError] = useState("");
@@ -151,6 +154,7 @@ useEffect(() => {
   setWinningRow(null);
   setShowConfetti(false);
   setShowShare(false);
+  setPoppedCell(null);
 
   // 2. Try to load saved state for this employee + today
   async function loadSavedState() {
@@ -173,8 +177,9 @@ useEffect(() => {
       setExplanationText(savedState.explanation || "");
     }
   }
-
+  
   loadSavedState();
+  fetchStreak();
 }, [puzzle, loggedIn, employeeId]);
 
   // Evaluation logic (unchanged)
@@ -214,6 +219,9 @@ useEffect(() => {
           newBoard[currentRow][currentCol] = key.toUpperCase();
           return newBoard;
         });
+        // Trigger pop animation on this cell
+        setPoppedCell({ row: currentRow, col: currentCol });
+        setTimeout(() => setPoppedCell(null), 150);
         setCurrentCol((prev) => prev + 1);
       } else if (key === "Backspace" && currentCol > 0) {
         setBoard((prev) => {
@@ -317,6 +325,43 @@ useEffect(() => {
     },
     [employeeId, puzzle]
   );
+
+    const fetchStreak = useCallback(async () => {
+    if (!employeeId) return;
+    const today = new Date();
+    let count = 0;
+    // Check yesterday backwards until a day is missing or lost
+    for (let i = 1; i <= 365; i++) {
+      const checkDate = new Date(today);
+      checkDate.setDate(checkDate.getDate() - i);
+      const dateStr = checkDate.toISOString().split("T")[0];
+      const { data } = await supabase
+        .from("leaderboard")
+        .select("won")
+        .eq("employee_id", employeeId)
+        .eq("puzzle_date", dateStr)
+        .maybeSingle();
+      if (data && data.won) {
+        count++;
+      } else {
+        break;
+      }
+    }
+    // If user won today, include today in streak
+    const todayStr = today.toISOString().split("T")[0];
+    const { data: todayData } = await supabase
+      .from("leaderboard")
+      .select("won")
+      .eq("employee_id", employeeId)
+      .eq("puzzle_date", todayStr)
+      .maybeSingle();
+    if (todayData && todayData.won) {
+      count++;
+    }
+    setStreak(count);
+    setStreakLoaded(true);
+  }, [employeeId]);
+
 
   const handleShare = useCallback(async () => {
     if (!puzzle) return;
@@ -424,12 +469,14 @@ useEffect(() => {
               setMessage("You won! 🎉");
               setExplanationText(puzzle.explanation);
               submitToLeaderboard(true, row + 1);
+              fetchStreak();
               setShowShare(true);
             } else if (row === 4) {
               setGameOver(true);
               setMessage("You lost! The word was " + puzzle.word + ".");
               setExplanationText(puzzle.explanation);
               submitToLeaderboard(false, null);
+              fetchStreak();
               setShowShare(true);
             } else {
               setCurrentRow((prev) => prev + 1);
@@ -510,7 +557,7 @@ useEffect(() => {
   if (loading) {
     return (
       <main className="min-h-screen bg-brand-dark text-brand-light flex items-center justify-center">
-        <p className="text-2xl">Loading puzzle...</p>
+        <p className="text-2xl">Exploding puzzle...</p>
       </main>
     );
   }
@@ -672,28 +719,31 @@ useEffect(() => {
           }`}
         >
           {/* Change ID button in top right corner */}
-          <div className="absolute top-2 right-2 flex items-center gap-2">
-            <a
-              href="/leaderboard"
-              className="text-xs sm:text-sm px-2 sm:px-3 py-1 bg-brand-orange hover:bg-brand-peach text-brand-dark rounded transition-colors font-semibold"
-            >
-              🏆 Leaderboard
-            </a>
-            <span className="text-xs sm:text-sm text-brand-peach hidden sm:inline">
-              {employeeId}
-            </span>
-            <button
-              onClick={changeEmployeeId}
-              className="text-xs sm:text-sm px-2 sm:px-3 py-1 bg-brand-mid hover:bg-brand-light text-brand-dark rounded transition-colors"
-            >
-              Change ID
-            </button>
-          </div>
+         <div className="absolute top-2 right-2 left-2 flex items-center justify-end gap-1 sm:gap-2 text-xs sm:text-sm">
+              <a
+                href="/leaderboard"
+                className="px-1.5 sm:px-2 py-1 bg-brand-orange hover:bg-brand-peach text-brand-dark rounded font-semibold transition-colors whitespace-nowrap"
+              >
+                🏆
+              </a>
+              <span className="text-brand-peach truncate max-w-[100px] sm:max-w-none">
+                {employeeId}
+                {streakLoaded && streak > 0 && (
+                  <span className="ml-1">🔥{streak}</span>
+                )}
+              </span>
+              <button
+                onClick={changeEmployeeId}
+                className="px-1.5 sm:px-2 py-1 bg-brand-mid hover:bg-brand-light text-brand-dark rounded transition-colors whitespace-nowrap"
+              >
+                ✎
+              </button>
+            </div>
 
           <div className="flex-1 flex flex-col items-center justify-center w-full px-2 pt-4 overflow-y-auto">
             <h1 className="text-3xl font-bold mb-3">Wordl3</h1>
             <div className="mb-3 text-lg text-brand-peach italic text-center">
-              {puzzle.hint}
+              Hint: {puzzle.hint}
             </div>
 
             {/* Board container with controlled width and overflow */}
@@ -709,7 +759,8 @@ useEffect(() => {
                           (animatingRow === rowIndex && flippingTiles[colIndex]
                             ? " tile-flip"
                             : "") +
-                          (winningRow === rowIndex ? " tile-bounce" : "")
+                          (winningRow === rowIndex ? " tile-bounce" : "") +
+                          (poppedCell?.row === rowIndex && poppedCell?.col === colIndex ? " tile-pop" : "")
                         }
                         style={{ width: getTileSize(), height: getTileSize() }}
                       >
