@@ -47,6 +47,52 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
   const [submissionStatus, setSubmissionStatus] = useState<string>("");
   const [streak, setStreak] = useState(0);
   const [streakLoaded, setStreakLoaded] = useState(false);
+  const [showSuggestionBox, setShowSuggestionBox] = useState(false);
+    const [suggestionWord, setSuggestionWord] = useState("");
+    const [suggestionSubmitted, setSuggestionSubmitted] = useState(false);
+    const [suggestionStatus, setSuggestionStatus] = useState("");
+
+const handleSuggestionSubmit = async () => {
+  if (!suggestionWord.trim()) return;
+  const today = new Date().toISOString().split("T")[0];
+  const { error } = await supabase
+    .from("suggestions")
+    .insert({
+      employee_id: employeeId,
+      display_name: displayName || employeeId,
+      suggested_word: suggestionWord.trim().toUpperCase(),
+      puzzle_date: today,
+    });
+  if (error) {
+    if (error.code === "23505") {
+      setSuggestionStatus("You already suggested a word today!");
+    } else {
+      setSuggestionStatus("Failed to submit suggestion.");
+    }
+  } else {
+    setSuggestionStatus("Suggestion submitted! 🎉");
+    setSuggestionSubmitted(true);
+    setShowSuggestionBox(false);
+    setSuggestionWord("");
+  }
+  setTimeout(() => setSuggestionStatus(""), 4000);
+};
+
+useEffect(() => {
+  if (!employeeId || !puzzle) return;
+  const today = new Date().toISOString().split("T")[0];
+  supabase
+    .from("suggestions")
+    .select("id")
+    .eq("employee_id", employeeId)
+    .eq("puzzle_date", today)
+    .maybeSingle()
+    .then(({ data }) => {
+      if (data) {
+        setSuggestionSubmitted(true);
+      }
+    });
+}, [employeeId, puzzle]);
 
   // Reset board when puzzle changes (or component mounts)
   useEffect(() => {
@@ -499,6 +545,58 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
         )}
         {submissionStatus && <div className="text-base font-semibold text-center mb-2 text-brand-peach">{submissionStatus}</div>}
       </div>
+
+      {/* Community Suggestion Box – always visible when logged in */}
+<div className="w-full flex justify-center px-2">
+  <div className="w-full max-w-sm">
+    {!showSuggestionBox && !suggestionSubmitted && (
+      <button
+        onClick={() => setShowSuggestionBox(true)}
+        className="w-full px-4 py-3 sm:py-4 bg-gradient-to-r from-brand-mid to-brand-orange hover:from-brand-light hover:to-brand-peach text-white font-bold rounded-lg transition-all duration-200 transform hover:scale-105 active:scale-95 shadow-lg text-sm sm:text-base"
+      >
+        💡 Suggest a word for tomorrow
+      </button>
+    )}
+    {showSuggestionBox && !suggestionSubmitted && (
+      <div className="bg-brand-dark border-2 border-brand-orange rounded-lg p-4 sm:p-5 space-y-3 shadow-lg animate-fade-in-up">
+        <p className="text-sm text-brand-light text-center font-semibold">💭 What word would you like to see?</p>
+        <input
+          type="text"
+          value={suggestionWord}
+          onChange={(e) => setSuggestionWord(e.target.value)}
+          maxLength={15}
+          placeholder="e.g., VALIDATION"
+          autoFocus
+          className="w-full p-3 bg-brand-dark border-2 border-brand-mid rounded-lg text-brand-light text-center uppercase font-bold tracking-wider focus:border-brand-orange focus:outline-none transition-colors"
+        />
+        <div className="flex gap-2 pt-2">
+          <button
+            onClick={handleSuggestionSubmit}
+            className="flex-1 bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold py-2 sm:py-3 rounded-lg transition-colors active:scale-95 text-sm sm:text-base"
+          >
+            ✨ Submit
+          </button>
+          <button
+            onClick={() => {
+              setShowSuggestionBox(false);
+              setSuggestionWord("");
+              setSuggestionStatus("");
+            }}
+            className="flex-1 bg-brand-mid hover:bg-brand-light text-white font-bold py-2 sm:py-3 rounded-lg transition-colors active:scale-95 text-sm sm:text-base"
+          >
+            ✕ Cancel
+          </button>
+        </div>
+      </div>
+    )}
+    {suggestionSubmitted && (
+      <p className="text-sm text-center text-brand-peach font-semibold mt-3">✅ Thank you! Your suggestion has been recorded.</p>
+    )}
+    {suggestionStatus && (
+      <p className="text-sm text-center text-brand-peach font-semibold mt-2">{suggestionStatus}</p>
+    )}
+  </div>
+</div>
 
       {!alreadyCompleted && (
         <div className="w-full max-w-lg pb-4 px-1 flex-shrink-0">
