@@ -66,6 +66,8 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
   const entranceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const dailyCellStatusesRef = useRef<CellStatus[][]>([]);
   const dailyMessageRef = useRef<string>("");
+  const [hasUnfinishedBonus, setHasUnfinishedBonus] = useState(false);
+  const savedBonusStateRef = useRef<any>(null);
   // ─── Helper functions ───
 
   const handleSuggestionSubmit = async () => {
@@ -96,6 +98,7 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
 
   const loadNextBonusWord = useCallback(async () => {
     if (bonusAttemptsLeft <= 0) return;
+    setHasUnfinishedBonus(false);
     const today = new Date().toISOString().split("T")[0];
     const { data } = await supabase.from("bonus_words").select("*");
     if (!data || data.length === 0) return;
@@ -135,6 +138,24 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
     setBonusGameOver(false);
     setBonusMessage("");
   }, [bonusAttemptsLeft, bonusUsedIds, employeeId, supabase]);
+
+  const resumeBonusRound = useCallback(() => {
+    const saved = savedBonusStateRef.current;
+    if (!saved) return;
+    setBonusPuzzle(saved.bonusPuzzle);
+    setBoard(saved.board);
+    setCellStatuses(saved.cellStatuses);
+    setCurrentRow(saved.currentRow);
+    setCurrentCol(saved.currentCol);
+    setBonusGameOver(saved.bonusGameOver);
+    setBonusMessage(saved.bonusMessage);
+    setKeyStatuses(saved.keyStatuses || {});
+    setBonusAttemptsLeft(saved.bonusAttemptsLeft ?? bonusAttemptsLeft);
+    setBonusRibbons(saved.bonusRibbons ?? bonusRibbons);
+    setGameOver(false);
+    setAlreadyCompleted(false);
+    setHasUnfinishedBonus(false);
+  }, [bonusAttemptsLeft, bonusRibbons]);
 
   useEffect(() => {
     if (!employeeId || !puzzle) return;
@@ -219,6 +240,7 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
 
     async function load() {
       const todayStr = new Date().toISOString().split("T")[0];
+    setHasUnfinishedBonus(false);
 
       // Check if already completed today
       const { data: existingResult } = await supabase
@@ -269,6 +291,20 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
         setShowConfetti(false);
         setPoppedCell(null);
         fetchStreak();
+
+        const storedBonusGameState = localStorage.getItem(`bonus_game_state_${employeeId}_${todayStr}`);
+        if (storedBonusGameState) {
+          try {
+            const parsed = JSON.parse(storedBonusGameState);
+            if (parsed && !parsed.bonusGameOver) {
+              setHasUnfinishedBonus(true);
+              savedBonusStateRef.current = parsed;
+            }
+          } catch {
+            // ignore invalid data
+          }
+        }
+
         // Now that state is fully restored, show the page
         entranceTimerRef.current = setTimeout(() => setEntranceDone(true), 50);
         return;
@@ -454,12 +490,14 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
       bonusGameOver,
       bonusMessage,
       keyStatuses,
+      bonusAttemptsLeft,
+      bonusRibbons,
     };
     localStorage.setItem(
       `bonus_game_state_${employeeId}_${today}`,
       JSON.stringify(bonusGameState)
     );
-  }, [bonusPuzzle, board, cellStatuses, currentRow, currentCol, bonusGameOver, bonusMessage, keyStatuses, employeeId]);
+  }, [bonusPuzzle, board, cellStatuses, currentRow, currentCol, bonusGameOver, bonusMessage, keyStatuses, bonusAttemptsLeft, bonusRibbons, employeeId]);
 
   useEffect(() => {
     if (gameOver) {
@@ -588,6 +626,7 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
                 setBonusAttemptsLeft((prev) => prev - 1);
                 setGameOver(true);
                 setAlreadyCompleted(true);
+                setHasUnfinishedBonus(false);
               } else if (row === 4) {
                 setBonusMessage("Not quite! The word was " + activePuzzle.word);
                 setExplanationText(activePuzzle.explanation);
@@ -595,6 +634,7 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
                 setBonusAttemptsLeft((prev) => prev - 1);
                 setGameOver(true);
                 setAlreadyCompleted(true);
+                setHasUnfinishedBonus(false);
               } else {
                 setCurrentRow((prev) => prev + 1);
                 setCurrentCol(0);
@@ -866,14 +906,23 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
         {/* Bonus Round entry button (after daily game over) */}
         {gameOver && !inBonusRound && bonusAttemptsLeft > 0 && (
           <div className="mt-4 flex flex-col items-center gap-2">
-            <button
-              onClick={() => {
-                loadNextBonusWord();
-              }}
-              className="px-6 py-2 bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold rounded transition-colors"
-            >
-              🎁 Bonus Round ({bonusAttemptsLeft} left)
-            </button>
+            {hasUnfinishedBonus ? (
+              <button
+                onClick={resumeBonusRound}
+                className="px-6 py-2 bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold rounded transition-colors"
+              >
+                ▶️ Resume Bonus Round
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  loadNextBonusWord();
+                }}
+                className="px-6 py-2 bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold rounded transition-colors"
+              >
+                🎁 Bonus Round ({bonusAttemptsLeft} left)
+              </button>
+            )}
             {bonusRibbons > 0 && (
               <span className="text-brand-peach text-sm">
                 🎀 {bonusRibbons} ribbon{bonusRibbons > 1 ? "s" : ""} earned today
