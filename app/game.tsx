@@ -22,10 +22,11 @@ interface Puzzle {
 interface GameProps {
   puzzle: Puzzle;
   employeeId: string;
+  displayName: string;
   changeEmployeeId: () => void;
 }
 
-export default function Game({ puzzle, employeeId, changeEmployeeId }: GameProps) {
+export default function Game({ puzzle, employeeId, displayName, changeEmployeeId }: GameProps) {
   const [wordLength, setWordLength] = useState(puzzle.word.length);
   const [board, setBoard] = useState<string[][]>([]);
   const [cellStatuses, setCellStatuses] = useState<CellStatus[][]>([]);
@@ -272,12 +273,12 @@ export default function Game({ puzzle, employeeId, changeEmployeeId }: GameProps
   }, [gameOver, saveGameState]);
 
   const submitToLeaderboard = useCallback(
-    async (won: boolean, attemptsUsed: number | null) => {
+    async (won: boolean, attemptsUsed: number | null, displayName: string) => {
       if (!employeeId || !puzzle) return;
       const today = new Date().toISOString().split("T")[0];
       const { error: insertError } = await supabase
         .from("leaderboard")
-        .insert([{ employee_id: employeeId, puzzle_date: today, attempts_used: attemptsUsed, won }]);
+        .insert([{ employee_id: employeeId, puzzle_date: today, attempts_used: attemptsUsed, won, display_name: displayName }]);
       if (insertError) {
         if (insertError.code === "23505") {
           setSubmissionStatus("Score already submitted for today!");
@@ -367,7 +368,7 @@ export default function Game({ puzzle, employeeId, changeEmployeeId }: GameProps
               setTimeout(() => setShowConfetti(false), 3000);
               setMessage("You won! 🎉");
               setExplanationText(puzzle.explanation);
-              submitToLeaderboard(true, row + 1);
+              submitToLeaderboard(true, row + 1, displayName);
               fetchStreak();
               setShowShare(true);
             } else if (row === 4) {
@@ -375,7 +376,7 @@ export default function Game({ puzzle, employeeId, changeEmployeeId }: GameProps
               setAlreadyCompleted(true);
               setMessage("You lost! The word was " + puzzle.word + ".");
               setExplanationText(puzzle.explanation);
-              submitToLeaderboard(false, null);
+              submitToLeaderboard(false, null, displayName);
               fetchStreak();
               setShowShare(true);
             } else {
@@ -386,7 +387,7 @@ export default function Game({ puzzle, employeeId, changeEmployeeId }: GameProps
         }
       }, tileIndex * 200);
     }
-  }, [puzzle, currentCol, wordLength, board, currentRow, evaluateGuess, animatingRow, submitToLeaderboard, fetchStreak]);
+  }, [puzzle, currentCol, wordLength, board, currentRow, evaluateGuess, animatingRow, submitToLeaderboard, fetchStreak, displayName]);
 
   const processKey = useCallback(
     (key: string) => {
@@ -457,7 +458,7 @@ export default function Game({ puzzle, employeeId, changeEmployeeId }: GameProps
       <div className="absolute top-2 right-2 left-2 flex items-center justify-end gap-1 sm:gap-2 text-xs sm:text-sm">
         <a href="/leaderboard" className="px-1.5 sm:px-2 py-1 bg-brand-orange hover:bg-brand-peach text-brand-dark rounded font-semibold transition-colors whitespace-nowrap">🏆</a>
         <span className="text-brand-peach truncate max-w-[100px] sm:max-w-none">
-          {employeeId}
+          {displayName || employeeId}
           {streakLoaded && streak > 0 && <span className="ml-1">🔥{streak}</span>}
         </span>
         <button onClick={changeEmployeeId} className="px-1.5 sm:px-2 py-1 bg-brand-mid hover:bg-brand-light text-brand-dark rounded transition-colors whitespace-nowrap">✎</button>

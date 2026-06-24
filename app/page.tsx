@@ -23,7 +23,11 @@ export default function Home() {
   const [passwordInput, setPasswordInput] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
   const [loginError, setLoginError] = useState("");
-
+  const [displayName, setDisplayName] = useState<string>("");
+  const [displayNameInput, setDisplayNameInput] = useState("");
+  const [showPasswordLogin, setShowPasswordLogin] = useState(false);
+  const [showPasswordSignUp, setShowPasswordSignUp] = useState(false);
+  const isValidEmployeeId = (id: string) => /^IN\d+$/i.test(id);
   const [showTutorial, setShowTutorial] = useState(false);
 
   // Fetch today's puzzle
@@ -71,12 +75,15 @@ export default function Home() {
   // Change employee ID (log out)
   const changeEmployeeId = () => {
     localStorage.removeItem("wordl3_employee_id");
+    localStorage.removeItem("wordl3_display_name");
     setEmployeeId("");
     setLoggedIn(false);
     setEmployeeInput("");
     setPasswordInput("");
     setLoginError("");
     setIsSignUp(false);
+    setShowPasswordLogin(false);
+    setShowPasswordSignUp(false);
   };
 
   // Auto-login from localStorage
@@ -87,6 +94,17 @@ export default function Home() {
       setLoggedIn(true);
     }
   }, []);
+
+    // Auto-login from localStorage
+    useEffect(() => {
+      const savedId = localStorage.getItem("wordl3_employee_id");
+      const savedDisplay = localStorage.getItem("wordl3_display_name");
+      if (savedId) {
+        setEmployeeId(savedId);
+        setLoggedIn(true);
+        if (savedDisplay) setDisplayName(savedDisplay);
+      }
+    }, []);
 
   // Render loading / error states
   if (loading) {
@@ -156,6 +174,17 @@ export default function Home() {
               setLoggedIn(true);
               localStorage.setItem("wordl3_employee_id", trimmedId);
               setPasswordInput("");
+              setShowPasswordLogin(false);
+                              // Success – fetch display name
+                const { data: userData } = await supabase
+                  .from("users")
+                  .select("display_name")
+                  .eq("employee_id", trimmedId)
+                  .single();
+                if (userData) {
+                  setDisplayName(userData.display_name);
+                  localStorage.setItem("wordl3_display_name", userData.display_name);
+                }
             }}
             className="bg-brand-dark border border-brand-mid rounded-xl p-6 max-w-sm w-full shadow-2xl animate-fade-in-up"
           >
@@ -175,14 +204,24 @@ export default function Home() {
                   autoFocus
                   className="w-full p-3 mb-3 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center text-lg tracking-wider"
                 />
-                <input
-                  type="password"
-                  value={passwordInput}
-                  onChange={(e) => setPasswordInput(e.target.value)}
-                  placeholder="Password"
-                  required
-                  className="w-full p-3 mb-4 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center"
-                />
+                <div className="relative mb-4">
+                  <input
+                    type={showPasswordLogin ? "text" : "password"}
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder="Password"
+                    required
+                    className="w-full p-3 pr-10 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPasswordLogin(!showPasswordLogin)}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-brand-mid hover:text-brand-light transition-colors"
+                    aria-label={showPasswordLogin ? "Hide password" : "Show password"}
+                  >
+                    {showPasswordLogin ? "👁️" : "👁️‍🗨️"}
+                  </button>
+                </div>
                 {loginError && (
                   <p className="text-red-400 text-sm mb-2 text-center">{loginError}</p>
                 )}
@@ -194,48 +233,72 @@ export default function Home() {
                 </button>
               </>
             ) : (
-              <>
-                <p className="text-sm text-brand-light mb-2">
-                  New account for <span className="font-bold">{employeeInput.trim()}</span>
-                </p>
-                <p className="text-xs text-brand-mid mb-4">
-                  Create a password to register.
-                </p>
-                <input
-                  type="password"
-                  value={passwordInput}
-                  onChange={(e) => setPasswordInput(e.target.value)}
-                  placeholder="Choose a password"
-                  required
-                  autoFocus
-                  className="w-full p-3 mb-4 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center"
-                />
-                {loginError && (
-                  <p className="text-red-400 text-sm mb-2 text-center">{loginError}</p>
-                )}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const trimmedId = employeeInput.trim();
-                    if (!passwordInput) return;
-                    const { error: insertErr } = await supabase
-                      .from("users")
-                      .insert({ employee_id: trimmedId, password: passwordInput });
-                    if (insertErr) {
-                      setLoginError("Could not create account.");
-                      return;
-                    }
-                    setEmployeeId(trimmedId);
-                    setLoggedIn(true);
-                    localStorage.setItem("wordl3_employee_id", trimmedId);
-                    setPasswordInput("");
-                    setIsSignUp(false);
-                  }}
-                  className="w-full bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold py-2 rounded transition-colors"
-                >
-                  Create Account & Play
-                </button>
-              </>
+                // Sign-up form (existing code) -> replace the entire : ( ... ) block
+                <>
+                  <p className="text-sm text-brand-light mb-2">
+                    New account for{" "}
+                    <span className="font-bold">{employeeInput.trim()}</span>
+                  </p>
+                  <p className="text-xs text-brand-mid mb-4">
+                    Create a password and choose a display name.
+                  </p>
+                  <input
+                    type="text"
+                    value={displayNameInput}
+                    onChange={(e) => setDisplayNameInput(e.target.value)}
+                    placeholder="Display Name (e.g., Jaadu)"
+                    required
+                    className="w-full p-3 mb-3 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center text-lg"
+                  />
+                  <input
+                    type="password"
+                    value={passwordInput}
+                    onChange={(e) => setPasswordInput(e.target.value)}
+                    placeholder="Choose a password"
+                    required
+                    className="w-full p-3 mb-4 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center"
+                  />
+                  {loginError && (
+                    <p className="text-red-400 text-sm mb-2 text-center">{loginError}</p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const trimmedId = employeeInput.trim();
+                      const trimmedDisplay = displayNameInput.trim();
+                      if (!passwordInput || !trimmedDisplay) return;
+
+                      // Validate employee ID format
+                      if (!isValidEmployeeId(trimmedId)) {
+                        setLoginError("Employee ID must be like IN1234");
+                        return;
+                      }
+
+                      const { error: insertErr } = await supabase
+                        .from("users")
+                        .insert({
+                          employee_id: trimmedId,
+                          password: passwordInput,
+                          display_name: trimmedDisplay,
+                        });
+                      if (insertErr) {
+                        setLoginError("Could not create account.");
+                        return;
+                      }
+                      setEmployeeId(trimmedId);
+                      setDisplayName(trimmedDisplay);
+                      setLoggedIn(true);
+                      localStorage.setItem("wordl3_employee_id", trimmedId);
+                      localStorage.setItem("wordl3_display_name", trimmedDisplay);
+                      setPasswordInput("");
+                      setDisplayNameInput("");
+                      setIsSignUp(false);
+                    }}
+                    className="w-full bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold py-2 rounded transition-colors"
+                  >
+                    Create Account & Play
+                  </button>
+                </>
             )}
           </form>
         </main>
@@ -250,6 +313,7 @@ export default function Home() {
           key={`${employeeId}-${puzzle.date}`}
           puzzle={puzzle}
           employeeId={employeeId}
+          displayName={displayName}
           changeEmployeeId={changeEmployeeId}
         />
       )}
