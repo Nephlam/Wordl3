@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 
 type CellStatus = "" | "correct" | "present" | "absent";
@@ -49,13 +49,13 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
   const [streakLoaded, setStreakLoaded] = useState(false);
 
   // Bonus round states
-  const [inBonusRound, setInBonusRound] = useState(false);
   const [bonusRibbons, setBonusRibbons] = useState(0);
   const [bonusAttemptsLeft, setBonusAttemptsLeft] = useState(5);
   const [bonusPuzzle, setBonusPuzzle] = useState<Puzzle | null>(null);
   const [bonusUsedIds, setBonusUsedIds] = useState<number[]>([]);
   const [bonusGameOver, setBonusGameOver] = useState(false);
   const [bonusMessage, setBonusMessage] = useState("");
+  const inBonusRound = bonusPuzzle !== null;
 
   // Suggestion box states (unchanged)
   const [showSuggestionBox, setShowSuggestionBox] = useState(false);
@@ -63,6 +63,9 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
   const [suggestionSubmitted, setSuggestionSubmitted] = useState(false);
   const [suggestionStatus, setSuggestionStatus] = useState("");
 
+  const entranceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const dailyCellStatusesRef = useRef<CellStatus[][]>([]);
+  const dailyMessageRef = useRef<string>("");
   // ─── Helper functions ───
 
   const handleSuggestionSubmit = async () => {
@@ -126,12 +129,11 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
     setFlippingTiles([]);
     setWinningRow(null);
     setShowConfetti(false);
-    setEntranceDone(false);
+    // REMOVED: setEntranceDone(false); -- prevent blank page
     setAlreadyCompleted(false);
     setShowShare(false);
     setBonusGameOver(false);
     setBonusMessage("");
-    setInBonusRound(true);  // enter bonus mode
   }, [bonusAttemptsLeft, bonusUsedIds, employeeId, supabase]);
 
   useEffect(() => {
@@ -169,7 +171,10 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
     setAlreadyCompleted(false);
     setSubmissionStatus("");
     setPoppedCell(null);
-    setTimeout(() => setEntranceDone(true), 50);
+    entranceTimerRef.current = setTimeout(() => setEntranceDone(true), 50);
+    return () => {
+      if (entranceTimerRef.current) clearTimeout(entranceTimerRef.current);
+      };
   }, [puzzle]);
 
   const fetchStreak = useCallback(async () => {
@@ -222,7 +227,11 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
         .eq("employee_id", employeeId)
         .eq("puzzle_date", todayStr)
         .maybeSingle();
-
+      
+      // Prevent entrance animation from revealing the page before we've loaded saved state
+      if (entranceTimerRef.current) clearTimeout(entranceTimerRef.current);
+      setEntranceDone(false);
+      
       if (existingResult) {
         setAlreadyCompleted(true);
         const { data: savedState } = await supabase
@@ -260,6 +269,8 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
         setShowConfetti(false);
         setPoppedCell(null);
         fetchStreak();
+        // Now that state is fully restored, show the page
+        entranceTimerRef.current = setTimeout(() => setEntranceDone(true), 50);
         return;
       }
 
@@ -312,7 +323,7 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
         .maybeSingle();
       if (bonusData) {
         setBonusRibbons(bonusData.ribbons);
-        setBonusAttemptsLeft(5 - bonusData.ribbons); // max 5
+        setBonusAttemptsLeft(5 - bonusData.ribbons);
       }
       const storedUsedIds = localStorage.getItem(`bonus_used_${employeeId}_${todayStr}`);
       if (storedUsedIds) {
@@ -334,7 +345,6 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
       if (storedBonusGameState) {
         try {
           const gameState = JSON.parse(storedBonusGameState);
-          setInBonusRound(gameState.inBonusRound);
           setBonusPuzzle(gameState.bonusPuzzle);
           setBoard(gameState.board);
           setCellStatuses(gameState.cellStatuses);
@@ -343,13 +353,15 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
           setBonusGameOver(gameState.bonusGameOver);
           setBonusMessage(gameState.bonusMessage);
           setKeyStatuses(gameState.keyStatuses || {});
-          setGameOver(true); // prevent input if bonus is over
-          setAlreadyCompleted(true); // hide keyboard
+          setGameOver(true);
+          setAlreadyCompleted(true);
         } catch (e) {
           // Invalid stored data, ignore
         }
       }
       fetchStreak();
+      // Now that state is fully restored, show the page
+      entranceTimerRef.current = setTimeout(() => setEntranceDone(true), 50);
     }
 
     load();
@@ -402,12 +414,38 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
       );
   }, [employeeId, puzzle, board, cellStatuses, currentRow, currentCol, keyStatuses, gameOver, message, explanationText]);
 
+  // Force-save with explicit values to avoid timing issues
+  const forceSaveGameState = async (
+    finalBoard: string[][],
+    finalCellStatuses: CellStatus[][],
+    finalMessage: string,
+    finalExplanation: string
+  ) => {
+    if (!employeeId || !puzzle) return;
+    const today = new Date().toISOString().split("T")[0];
+    await supabase.from("game_state").upsert(
+      {
+        employee_id: employeeId,
+        puzzle_date: today,
+        board_state: finalBoard,
+        cell_statuses: finalCellStatuses,
+        current_row: currentRow,
+        current_col: currentCol,
+        key_statuses: keyStatuses,
+        game_over: true,
+        message: finalMessage,
+        explanation: finalExplanation,
+        submitted: false,
+      },
+      { onConflict: "employee_id,puzzle_date" }
+    );
+  };
+
   // Save bonus game state whenever it changes
   useEffect(() => {
-    if (!inBonusRound || !bonusPuzzle) return;
+    if (!bonusPuzzle) return;
     const today = new Date().toISOString().split("T")[0];
     const bonusGameState = {
-      inBonusRound,
       bonusPuzzle,
       board,
       cellStatuses,
@@ -421,7 +459,7 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
       `bonus_game_state_${employeeId}_${today}`,
       JSON.stringify(bonusGameState)
     );
-  }, [inBonusRound, bonusPuzzle, board, cellStatuses, currentRow, currentCol, bonusGameOver, bonusMessage, keyStatuses, employeeId]);
+  }, [bonusPuzzle, board, cellStatuses, currentRow, currentCol, bonusGameOver, bonusMessage, keyStatuses, employeeId]);
 
   useEffect(() => {
     if (gameOver) {
@@ -488,12 +526,16 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
   };
 
   const handleEnter = useCallback(() => {
-    const activePuzzle = inBonusRound && bonusPuzzle ? bonusPuzzle : puzzle;
+    const activePuzzle = bonusPuzzle ? bonusPuzzle : puzzle;
     if (!activePuzzle || currentCol !== activePuzzle.word.length || animatingRow !== null) return;
 
     const guess = board[currentRow].map((l) => l.toUpperCase());
     const solution = activePuzzle.word.toUpperCase();
     const newStatuses = evaluateGuess(guess, solution);
+
+    // Predict final cellStatuses after all tiles are revealed
+    const predictedFinalStatuses = cellStatuses.map((row) => [...row]);
+    predictedFinalStatuses[currentRow] = newStatuses;
 
     setKeyStatuses((prev) => {
       const updated = { ...prev };
@@ -541,19 +583,29 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
                 setBonusRibbons(newRibbons);
                 updateRibbons(newRibbons);
                 setBonusMessage("Ribbon earned! 🎀");
-                setMessage(activePuzzle.explanation); // show explanation
-                setExplanationText("");
-              } else {
-                setBonusMessage("Not quite! The word was " + activePuzzle.word);
-                setMessage(""); // clear daily message
                 setExplanationText(activePuzzle.explanation);
+                setBonusGameOver(true);
+                setBonusAttemptsLeft((prev) => prev - 1);
+                setGameOver(true);
+                setAlreadyCompleted(true);
+              } else if (row === 4) {
+                setBonusMessage("Not quite! The word was " + activePuzzle.word);
+                setExplanationText(activePuzzle.explanation);
+                setBonusGameOver(true);
+                setBonusAttemptsLeft((prev) => prev - 1);
+                setGameOver(true);
+                setAlreadyCompleted(true);
+              } else {
+                setCurrentRow((prev) => prev + 1);
+                setCurrentCol(0);
               }
-              setBonusGameOver(true);
-              setBonusAttemptsLeft((prev) => prev - 1);
-              setGameOver(true); // prevent further input
-              setAlreadyCompleted(true); // to hide keyboard
             } else {
               // Daily game handling
+              const finalMessage = guessWord === solution
+                ? "You won! 🎉"
+                : (row === 4 ? `You lost! The word was ${puzzle.word}.` : "");
+              const finalExplanation = puzzle.explanation;
+
               if (guessWord === solution) {
                 setGameOver(true);
                 setAlreadyCompleted(true);
@@ -565,6 +617,15 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
                 submitToLeaderboard(true, row + 1, displayName);
                 fetchStreak();
                 setShowShare(true);
+                // Force-save final state (win)
+                forceSaveGameState(
+                  board.map((r) => [...r]),
+                  predictedFinalStatuses,
+                  "You won! 🎉",
+                  puzzle.explanation
+                );
+                dailyCellStatusesRef.current = predictedFinalStatuses;
+                dailyMessageRef.current = "You won! 🎉";
               } else if (row === 4) {
                 setGameOver(true);
                 setAlreadyCompleted(true);
@@ -573,6 +634,15 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
                 submitToLeaderboard(false, null, displayName);
                 fetchStreak();
                 setShowShare(true);
+                // Force-save final state (loss)
+                forceSaveGameState(
+                  board.map((r) => [...r]),
+                  predictedFinalStatuses,
+                  `You lost! The word was ${puzzle.word}.`,
+                  puzzle.explanation
+                );
+                dailyCellStatusesRef.current = predictedFinalStatuses;
+                dailyMessageRef.current = `You lost! The word was ${puzzle.word}.`;
               } else {
                 setCurrentRow((prev) => prev + 1);
                 setCurrentCol(0);
@@ -596,11 +666,13 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
     displayName,
     bonusRibbons,
     updateRibbons,
+    cellStatuses,
+    keyStatuses,
   ]);
 
   const processKey = useCallback(
     (key: string) => {
-      if (gameOver || !puzzle || alreadyCompleted || animatingRow !== null || (inBonusRound && bonusGameOver)) return;
+      if (gameOver || !(bonusPuzzle ? bonusPuzzle : puzzle) || (alreadyCompleted && !bonusPuzzle) || animatingRow !== null || (bonusPuzzle && bonusGameOver)) return;
       if (/^[a-zA-Z0-9]$/.test(key) && currentCol < wordLength) {
         setBoard((prev) => {
           const newBoard = prev.map((row) => [...row]);
@@ -621,17 +693,17 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
         handleEnter();
       }
     },
-    [gameOver, puzzle, alreadyCompleted, animatingRow, currentCol, wordLength, currentRow, handleEnter, inBonusRound, bonusGameOver]
+    [gameOver, puzzle, alreadyCompleted, animatingRow, currentCol, wordLength, currentRow, handleEnter, bonusPuzzle, bonusGameOver]
   );
 
   useEffect(() => {
-    if (alreadyCompleted && !inBonusRound) return;
+    if (alreadyCompleted && !bonusPuzzle) return;
     const handler = (e: KeyboardEvent) => processKey(e.key);
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [processKey, alreadyCompleted, inBonusRound]);
+  }, [processKey, alreadyCompleted, bonusPuzzle]);
 
-  const currentPuzzle = inBonusRound && bonusPuzzle ? bonusPuzzle : puzzle;
+  const currentPuzzle = bonusPuzzle ? bonusPuzzle : puzzle;
 
   const getTileSize = () => {
     const len = currentPuzzle.word.length;
@@ -712,6 +784,45 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
 
         {/* Bonus round messages */}
         {inBonusRound && bonusMessage && <div className="text-xl font-bold text-center mb-2 text-brand-orange">{bonusMessage}</div>}
+        {inBonusRound && (
+          <button
+            onClick={async () => {
+              const evaluatedRows: string[] = [];
+              const statuses = dailyCellStatusesRef.current;
+              for (let r = 0; r < statuses.length; r++) {
+                const row = statuses[r];
+                if (row && row.some((s) => s !== "")) {
+                  evaluatedRows.push(
+                    row
+                      .map((s) =>
+                        s === "correct"
+                          ? "🟩"
+                          : s === "present"
+                          ? "🟨"
+                          : "⬛"
+                      )
+                      .join("")
+                  );
+                }
+              }
+              const attemptsUsed = evaluatedRows.length;
+              const won = dailyMessageRef.current.includes("won");
+              const shareText =
+                `Wordl3 ${puzzle.date}\n${won ? "✅" : "❌"} ${attemptsUsed}/5\n\n${evaluatedRows.join("\n")}\n\nhttps://wordl3-amber.vercel.app/`;
+              try {
+                await navigator.clipboard.writeText(shareText);
+                setSubmissionStatus("Daily result copied! 📋");
+                setTimeout(() => setSubmissionStatus(""), 2000);
+              } catch {
+                setSubmissionStatus("Failed to copy.");
+                setTimeout(() => setSubmissionStatus(""), 2000);
+              }
+            }}
+            className="mt-2 px-4 py-2 bg-brand-mid hover:bg-brand-light text-white font-semibold rounded transition-colors text-sm"
+          >
+            📤 Share Daily Result
+          </button>
+        )}
         {inBonusRound && bonusGameOver && explanationText && <div className="text-base text-brand-light max-w-md text-center mb-3">{explanationText}</div>}
 
         {/* Daily share button (hide during bonus) */}
