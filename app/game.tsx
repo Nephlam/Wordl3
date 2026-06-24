@@ -47,54 +47,108 @@ export default function Game({ puzzle, employeeId, displayName, changeEmployeeId
   const [submissionStatus, setSubmissionStatus] = useState<string>("");
   const [streak, setStreak] = useState(0);
   const [streakLoaded, setStreakLoaded] = useState(false);
+
+  // Bonus round states
+  const [inBonusRound, setInBonusRound] = useState(false);
+  const [bonusRibbons, setBonusRibbons] = useState(0);
+  const [bonusAttemptsLeft, setBonusAttemptsLeft] = useState(5);
+  const [bonusPuzzle, setBonusPuzzle] = useState<Puzzle | null>(null);
+  const [bonusUsedIds, setBonusUsedIds] = useState<number[]>([]);
+  const [bonusGameOver, setBonusGameOver] = useState(false);
+  const [bonusMessage, setBonusMessage] = useState("");
+
+  // Suggestion box states (unchanged)
   const [showSuggestionBox, setShowSuggestionBox] = useState(false);
-    const [suggestionWord, setSuggestionWord] = useState("");
-    const [suggestionSubmitted, setSuggestionSubmitted] = useState(false);
-    const [suggestionStatus, setSuggestionStatus] = useState("");
+  const [suggestionWord, setSuggestionWord] = useState("");
+  const [suggestionSubmitted, setSuggestionSubmitted] = useState(false);
+  const [suggestionStatus, setSuggestionStatus] = useState("");
 
-const handleSuggestionSubmit = async () => {
-  if (!suggestionWord.trim()) return;
-  const today = new Date().toISOString().split("T")[0];
-  const { error } = await supabase
-    .from("suggestions")
-    .insert({
-      employee_id: employeeId,
-      display_name: displayName || employeeId,
-      suggested_word: suggestionWord.trim().toUpperCase(),
-      puzzle_date: today,
-    });
-  if (error) {
-    if (error.code === "23505") {
-      setSuggestionStatus("You already suggested a word today!");
-    } else {
-      setSuggestionStatus("Failed to submit suggestion.");
-    }
-  } else {
-    setSuggestionStatus("Suggestion submitted! 🎉");
-    setSuggestionSubmitted(true);
-    setShowSuggestionBox(false);
-    setSuggestionWord("");
-  }
-  setTimeout(() => setSuggestionStatus(""), 4000);
-};
+  // ─── Helper functions ───
 
-useEffect(() => {
-  if (!employeeId || !puzzle) return;
-  const today = new Date().toISOString().split("T")[0];
-  supabase
-    .from("suggestions")
-    .select("id")
-    .eq("employee_id", employeeId)
-    .eq("puzzle_date", today)
-    .maybeSingle()
-    .then(({ data }) => {
-      if (data) {
-        setSuggestionSubmitted(true);
+  const handleSuggestionSubmit = async () => {
+    if (!suggestionWord.trim()) return;
+    const today = new Date().toISOString().split("T")[0];
+    const { error } = await supabase
+      .from("suggestions")
+      .insert({
+        employee_id: employeeId,
+        display_name: displayName || employeeId,
+        suggested_word: suggestionWord.trim().toUpperCase(),
+        puzzle_date: today,
+      });
+    if (error) {
+      if (error.code === "23505") {
+        setSuggestionStatus("You already suggested a word today!");
+      } else {
+        setSuggestionStatus("Failed to submit suggestion.");
       }
-    });
-}, [employeeId, puzzle]);
+    } else {
+      setSuggestionStatus("Suggestion submitted! 🎉");
+      setSuggestionSubmitted(true);
+      setShowSuggestionBox(false);
+      setSuggestionWord("");
+    }
+    setTimeout(() => setSuggestionStatus(""), 4000);
+  };
 
-  // Reset board when puzzle changes (or component mounts)
+  const loadNextBonusWord = useCallback(async () => {
+    if (bonusAttemptsLeft <= 0) return;
+    const today = new Date().toISOString().split("T")[0];
+    const { data } = await supabase.from("bonus_words").select("*");
+    if (!data || data.length === 0) return;
+    const available = data.filter((w) => !bonusUsedIds.includes(w.id));
+    if (available.length === 0) return;
+    const randomWord = available[Math.floor(Math.random() * available.length)];
+    const newBonusPuzzle = {
+      word: randomWord.word,
+      hint: randomWord.hint,
+      explanation: randomWord.explanation,
+      date: today,
+    };
+    setBonusPuzzle(newBonusPuzzle);
+    // Persist bonus puzzle to localStorage for refresh resilience
+    localStorage.setItem(`bonus_puzzle_${employeeId}_${today}`, JSON.stringify(newBonusPuzzle));
+    const newUsedIds = [...bonusUsedIds, randomWord.id];
+    setBonusUsedIds(newUsedIds);
+    localStorage.setItem(`bonus_used_${employeeId}_${today}`, JSON.stringify(newUsedIds));
+    // Reset board for new bonus word
+    const len = randomWord.word.length;
+    setWordLength(len);
+    setBoard(Array.from({ length: 5 }, () => Array(len).fill("")));
+    setCellStatuses(Array.from({ length: 5 }, () => Array(len).fill("")));
+    setCurrentRow(0);
+    setCurrentCol(0);
+    setGameOver(false);
+    setKeyStatuses({});
+    setMessage("");
+    setExplanationText("");
+    setAnimatingRow(null);
+    setFlippingTiles([]);
+    setWinningRow(null);
+    setShowConfetti(false);
+    setEntranceDone(false);
+    setAlreadyCompleted(false);
+    setShowShare(false);
+    setBonusGameOver(false);
+    setBonusMessage("");
+    setInBonusRound(true);  // enter bonus mode
+  }, [bonusAttemptsLeft, bonusUsedIds, employeeId, supabase]);
+
+  useEffect(() => {
+    if (!employeeId || !puzzle) return;
+    const today = new Date().toISOString().split("T")[0];
+    supabase
+      .from("suggestions")
+      .select("id")
+      .eq("employee_id", employeeId)
+      .eq("puzzle_date", today)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) setSuggestionSubmitted(true);
+      });
+  }, [employeeId, puzzle]);
+
+  // Reset board when the daily puzzle changes (or component mounts)
   useEffect(() => {
     const len = puzzle.word.length;
     setWordLength(len);
@@ -170,7 +224,6 @@ useEffect(() => {
         .maybeSingle();
 
       if (existingResult) {
-        // Already completed → load saved state WITHOUT clearing first
         setAlreadyCompleted(true);
         const { data: savedState } = await supabase
           .from("game_state")
@@ -250,13 +303,58 @@ useEffect(() => {
         }
       }
 
+      // Bonus progress
+      const { data: bonusData } = await supabase
+        .from("bonus_leaderboard")
+        .select("ribbons")
+        .eq("employee_id", employeeId)
+        .eq("puzzle_date", todayStr)
+        .maybeSingle();
+      if (bonusData) {
+        setBonusRibbons(bonusData.ribbons);
+        setBonusAttemptsLeft(5 - bonusData.ribbons); // max 5
+      }
+      const storedUsedIds = localStorage.getItem(`bonus_used_${employeeId}_${todayStr}`);
+      if (storedUsedIds) {
+        setBonusUsedIds(JSON.parse(storedUsedIds));
+      }
+      // Restore bonus puzzle if it was persisted during a previous session
+      const storedBonusPuzzle = localStorage.getItem(`bonus_puzzle_${employeeId}_${todayStr}`);
+      if (storedBonusPuzzle) {
+        try {
+          const parsedPuzzle = JSON.parse(storedBonusPuzzle);
+          setBonusPuzzle(parsedPuzzle);
+        } catch (e) {
+          // Invalid stored data, ignore
+        }
+      }
+      
+      // Restore complete bonus game state if it was persisted
+      const storedBonusGameState = localStorage.getItem(`bonus_game_state_${employeeId}_${todayStr}`);
+      if (storedBonusGameState) {
+        try {
+          const gameState = JSON.parse(storedBonusGameState);
+          setInBonusRound(gameState.inBonusRound);
+          setBonusPuzzle(gameState.bonusPuzzle);
+          setBoard(gameState.board);
+          setCellStatuses(gameState.cellStatuses);
+          setCurrentRow(gameState.currentRow);
+          setCurrentCol(gameState.currentCol);
+          setBonusGameOver(gameState.bonusGameOver);
+          setBonusMessage(gameState.bonusMessage);
+          setKeyStatuses(gameState.keyStatuses || {});
+          setGameOver(true); // prevent input if bonus is over
+          setAlreadyCompleted(true); // hide keyboard
+        } catch (e) {
+          // Invalid stored data, ignore
+        }
+      }
       fetchStreak();
     }
 
     load();
   }, [puzzle, employeeId, fetchStreak]);
 
-  // Evaluation logic
   const evaluateGuess = (guess: string[], solution: string): CellStatus[] => {
     const statuses: CellStatus[] = Array(guess.length).fill("");
     const solutionLetters = solution.split("");
@@ -304,14 +402,27 @@ useEffect(() => {
       );
   }, [employeeId, puzzle, board, cellStatuses, currentRow, currentCol, keyStatuses, gameOver, message, explanationText]);
 
-  // Auto-save on keystroke
+  // Save bonus game state whenever it changes
   useEffect(() => {
-    if (!puzzle || gameOver) return;
-    const timer = setTimeout(() => saveGameState(), 800);
-    return () => clearTimeout(timer);
-  }, [board, currentCol, puzzle, gameOver, saveGameState]);
+    if (!inBonusRound || !bonusPuzzle) return;
+    const today = new Date().toISOString().split("T")[0];
+    const bonusGameState = {
+      inBonusRound,
+      bonusPuzzle,
+      board,
+      cellStatuses,
+      currentRow,
+      currentCol,
+      bonusGameOver,
+      bonusMessage,
+      keyStatuses,
+    };
+    localStorage.setItem(
+      `bonus_game_state_${employeeId}_${today}`,
+      JSON.stringify(bonusGameState)
+    );
+  }, [inBonusRound, bonusPuzzle, board, cellStatuses, currentRow, currentCol, bonusGameOver, bonusMessage, keyStatuses, employeeId]);
 
-  // Save final state when game ends
   useEffect(() => {
     if (gameOver) {
       saveGameState();
@@ -361,11 +472,27 @@ useEffect(() => {
     }
   }, [puzzle, cellStatuses, message]);
 
+  const updateRibbons = async (newRibbons: number) => {
+    const today = new Date().toISOString().split("T")[0];
+    await supabase
+      .from("bonus_leaderboard")
+      .upsert(
+        {
+          employee_id: employeeId,
+          display_name: displayName || employeeId,
+          puzzle_date: today,
+          ribbons: newRibbons,
+        },
+        { onConflict: "employee_id,puzzle_date" }
+      );
+  };
+
   const handleEnter = useCallback(() => {
-    if (!puzzle || currentCol !== wordLength || animatingRow !== null) return;
+    const activePuzzle = inBonusRound && bonusPuzzle ? bonusPuzzle : puzzle;
+    if (!activePuzzle || currentCol !== activePuzzle.word.length || animatingRow !== null) return;
 
     const guess = board[currentRow].map((l) => l.toUpperCase());
-    const solution = puzzle.word.toUpperCase();
+    const solution = activePuzzle.word.toUpperCase();
     const newStatuses = evaluateGuess(guess, solution);
 
     setKeyStatuses((prev) => {
@@ -381,7 +508,7 @@ useEffect(() => {
     });
 
     const row = currentRow;
-    const length = wordLength;
+    const length = activePuzzle.word.length;
     setAnimatingRow(row);
     setFlippingTiles(new Array(length).fill(false));
 
@@ -406,38 +533,74 @@ useEffect(() => {
             setAnimatingRow(null);
             setFlippingTiles([]);
             const guessWord = guess.join("").toUpperCase();
-            if (guessWord === solution) {
-              setGameOver(true);
-              setAlreadyCompleted(true);
-              setWinningRow(row);
-              setShowConfetti(true);
-              setTimeout(() => setShowConfetti(false), 3000);
-              setMessage("You won! 🎉");
-              setExplanationText(puzzle.explanation);
-              submitToLeaderboard(true, row + 1, displayName);
-              fetchStreak();
-              setShowShare(true);
-            } else if (row === 4) {
-              setGameOver(true);
-              setAlreadyCompleted(true);
-              setMessage("You lost! The word was " + puzzle.word + ".");
-              setExplanationText(puzzle.explanation);
-              submitToLeaderboard(false, null, displayName);
-              fetchStreak();
-              setShowShare(true);
+
+            if (inBonusRound) {
+              // Bonus round handling
+              if (guessWord === solution) {
+                const newRibbons = bonusRibbons + 1;
+                setBonusRibbons(newRibbons);
+                updateRibbons(newRibbons);
+                setBonusMessage("Ribbon earned! 🎀");
+                setMessage(activePuzzle.explanation); // show explanation
+                setExplanationText("");
+              } else {
+                setBonusMessage("Not quite! The word was " + activePuzzle.word);
+                setMessage(""); // clear daily message
+                setExplanationText(activePuzzle.explanation);
+              }
+              setBonusGameOver(true);
+              setBonusAttemptsLeft((prev) => prev - 1);
+              setGameOver(true); // prevent further input
+              setAlreadyCompleted(true); // to hide keyboard
             } else {
-              setCurrentRow((prev) => prev + 1);
-              setCurrentCol(0);
+              // Daily game handling
+              if (guessWord === solution) {
+                setGameOver(true);
+                setAlreadyCompleted(true);
+                setWinningRow(row);
+                setShowConfetti(true);
+                setTimeout(() => setShowConfetti(false), 3000);
+                setMessage("You won! 🎉");
+                setExplanationText(puzzle.explanation);
+                submitToLeaderboard(true, row + 1, displayName);
+                fetchStreak();
+                setShowShare(true);
+              } else if (row === 4) {
+                setGameOver(true);
+                setAlreadyCompleted(true);
+                setMessage("You lost! The word was " + puzzle.word + ".");
+                setExplanationText(puzzle.explanation);
+                submitToLeaderboard(false, null, displayName);
+                fetchStreak();
+                setShowShare(true);
+              } else {
+                setCurrentRow((prev) => prev + 1);
+                setCurrentCol(0);
+              }
             }
           }, 500);
         }
       }, tileIndex * 200);
     }
-  }, [puzzle, currentCol, wordLength, board, currentRow, evaluateGuess, animatingRow, submitToLeaderboard, fetchStreak, displayName]);
+  }, [
+    puzzle,
+    bonusPuzzle,
+    inBonusRound,
+    currentCol,
+    board,
+    currentRow,
+    evaluateGuess,
+    animatingRow,
+    submitToLeaderboard,
+    fetchStreak,
+    displayName,
+    bonusRibbons,
+    updateRibbons,
+  ]);
 
   const processKey = useCallback(
     (key: string) => {
-      if (gameOver || !puzzle || alreadyCompleted || animatingRow !== null) return;
+      if (gameOver || !puzzle || alreadyCompleted || animatingRow !== null || (inBonusRound && bonusGameOver)) return;
       if (/^[a-zA-Z0-9]$/.test(key) && currentCol < wordLength) {
         setBoard((prev) => {
           const newBoard = prev.map((row) => [...row]);
@@ -458,18 +621,20 @@ useEffect(() => {
         handleEnter();
       }
     },
-    [gameOver, puzzle, alreadyCompleted, animatingRow, currentCol, wordLength, currentRow, handleEnter]
+    [gameOver, puzzle, alreadyCompleted, animatingRow, currentCol, wordLength, currentRow, handleEnter, inBonusRound, bonusGameOver]
   );
 
   useEffect(() => {
-    if (alreadyCompleted) return;
+    if (alreadyCompleted && !inBonusRound) return;
     const handler = (e: KeyboardEvent) => processKey(e.key);
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [processKey, alreadyCompleted]);
+  }, [processKey, alreadyCompleted, inBonusRound]);
+
+  const currentPuzzle = inBonusRound && bonusPuzzle ? bonusPuzzle : puzzle;
 
   const getTileSize = () => {
-    const len = puzzle.word.length;
+    const len = currentPuzzle.word.length;
     if (len <= 3) return "3.5rem";
     if (len <= 5) return "3rem";
     if (len <= 7) return "2.5rem";
@@ -506,14 +671,17 @@ useEffect(() => {
         <span className="text-brand-peach truncate max-w-[100px] sm:max-w-none">
           {displayName || employeeId}
           {streakLoaded && streak > 0 && <span className="ml-1">🔥{streak}</span>}
+          {bonusRibbons > 0 && <span className="ml-1">🎀{bonusRibbons}</span>}
         </span>
         <button onClick={changeEmployeeId} className="px-1.5 sm:px-2 py-1 bg-brand-mid hover:bg-brand-light text-brand-dark rounded transition-colors whitespace-nowrap">✎</button>
       </div>
 
       <div className="flex-1 flex flex-col items-center justify-center w-full px-2 pt-4 overflow-y-auto">
         <h1 className="text-3xl font-bold mb-3">Wordl3</h1>
-        {alreadyCompleted && <p className="text-sm text-brand-orange uppercase tracking-wider mb-1">✨ Admire Puzzle ✨</p>}
-        <div className="mb-3 text-lg text-brand-peach italic text-center">Hint: {puzzle.hint}</div>
+        {alreadyCompleted && !inBonusRound && <p className="text-sm text-brand-orange uppercase tracking-wider mb-1">✨ Admire Puzzle ✨</p>}
+        {inBonusRound && <p className="text-sm text-brand-orange uppercase tracking-wider mb-1">🎁 Bonus Round</p>}
+
+        <div className="mb-3 text-lg text-brand-peach italic text-center">Hint: {currentPuzzle.hint}</div>
 
         <div className="mb-4 w-full flex justify-center overflow-x-auto">
           <div className="grid gap-1 sm:gap-1.5">
@@ -538,67 +706,126 @@ useEffect(() => {
           </div>
         </div>
 
-        {message && <div className="text-xl font-bold text-center mb-2 text-brand-orange">{message}</div>}
-        {explanationText && <div className="text-base text-brand-light max-w-md text-center mb-3">{explanationText}</div>}
-        {showShare && (
+        {/* Messages */}
+        {message && !inBonusRound && <div className="text-xl font-bold text-center mb-2 text-brand-orange">{message}</div>}
+        {explanationText && !inBonusRound && <div className="text-base text-brand-light max-w-md text-center mb-3">{explanationText}</div>}
+
+        {/* Bonus round messages */}
+        {inBonusRound && bonusMessage && <div className="text-xl font-bold text-center mb-2 text-brand-orange">{bonusMessage}</div>}
+        {inBonusRound && bonusGameOver && explanationText && <div className="text-base text-brand-light max-w-md text-center mb-3">{explanationText}</div>}
+
+        {/* Daily share button (hide during bonus) */}
+        {showShare && !inBonusRound && (
           <button onClick={handleShare} className="mt-4 px-6 py-2 bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold rounded transition-colors">📤 Share Result</button>
         )}
         {submissionStatus && <div className="text-base font-semibold text-center mb-2 text-brand-peach">{submissionStatus}</div>}
-      </div>
 
-      {/* Community Suggestion Box – always visible when logged in */}
-<div className="w-full flex justify-center px-2">
-  <div className="w-full max-w-sm">
-    {!showSuggestionBox && !suggestionSubmitted && (
-      <button
-        onClick={() => setShowSuggestionBox(true)}
-        className="w-full px-4 py-3 sm:py-4 bg-gradient-to-r from-brand-mid to-brand-orange hover:from-brand-light hover:to-brand-peach text-white font-bold rounded-lg transition-all duration-200 transform hover:scale-105 active:scale-95 shadow-lg text-sm sm:text-base"
-      >
-        💡 Suggest a word for tomorrow
-      </button>
-    )}
-    {showSuggestionBox && !suggestionSubmitted && (
-      <div className="bg-brand-dark border-2 border-brand-orange rounded-lg p-4 sm:p-5 space-y-3 shadow-lg animate-fade-in-up">
-        <p className="text-sm text-brand-light text-center font-semibold">💭 What word would you like to see?</p>
-        <input
-          type="text"
-          value={suggestionWord}
-          onChange={(e) => setSuggestionWord(e.target.value)}
-          maxLength={15}
-          placeholder="e.g., VALIDATION"
-          autoFocus
-          className="w-full p-3 bg-brand-dark border-2 border-brand-mid rounded-lg text-brand-light text-center uppercase font-bold tracking-wider focus:border-brand-orange focus:outline-none transition-colors"
-        />
-        <div className="flex gap-2 pt-2">
-          <button
-            onClick={handleSuggestionSubmit}
-            className="flex-1 bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold py-2 sm:py-3 rounded-lg transition-colors active:scale-95 text-sm sm:text-base"
-          >
-            ✨ Submit
-          </button>
+        {/* Next bonus word button */}
+        {inBonusRound && bonusGameOver && bonusAttemptsLeft > 0 && (
           <button
             onClick={() => {
-              setShowSuggestionBox(false);
-              setSuggestionWord("");
-              setSuggestionStatus("");
+              setBonusGameOver(false);
+              loadNextBonusWord();
             }}
-            className="flex-1 bg-brand-mid hover:bg-brand-light text-white font-bold py-2 sm:py-3 rounded-lg transition-colors active:scale-95 text-sm sm:text-base"
+            className="mt-4 px-6 py-2 bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold rounded transition-colors"
           >
-            ✕ Cancel
+            ➡️ Next Bonus Word ({bonusAttemptsLeft} left)
           </button>
+        )}
+
+        {/* Bonus round complete */}
+        {inBonusRound && bonusAttemptsLeft === 0 && (
+          <div className="mt-4 text-center">
+            <p className="text-xl font-bold text-brand-orange mb-2">Bonus round complete! 🎉</p>
+            <p className="text-brand-peach">You earned 🎀 {bonusRibbons} ribbon{bonusRibbons > 1 ? "s" : ""}!</p>
+            <button
+              onClick={() => {
+                const today = new Date().toISOString().split("T")[0];
+                localStorage.removeItem(`bonus_puzzle_${employeeId}_${today}`);
+                localStorage.removeItem(`bonus_game_state_${employeeId}_${today}`);
+                window.location.reload();
+              }}
+              className="mt-4 px-6 py-2 bg-brand-mid hover:bg-brand-light text-white font-bold rounded transition-colors"
+            >
+              ← Back to daily puzzle
+            </button>
+          </div>
+        )}
+
+        {/* Bonus Round entry button (after daily game over) */}
+        {gameOver && !inBonusRound && bonusAttemptsLeft > 0 && (
+          <div className="mt-4 flex flex-col items-center gap-2">
+            <button
+              onClick={() => {
+                loadNextBonusWord();
+              }}
+              className="px-6 py-2 bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold rounded transition-colors"
+            >
+              🎁 Bonus Round ({bonusAttemptsLeft} left)
+            </button>
+            {bonusRibbons > 0 && (
+              <span className="text-brand-peach text-sm">
+                🎀 {bonusRibbons} ribbon{bonusRibbons > 1 ? "s" : ""} earned today
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Suggestion box (unchanged) */}
+      <div className="w-full flex justify-center px-2">
+        <div className="w-full max-w-sm">
+          {!showSuggestionBox && !suggestionSubmitted && (
+            <button
+              onClick={() => setShowSuggestionBox(true)}
+              className="w-full px-4 py-3 sm:py-4 bg-gradient-to-r from-brand-mid to-brand-orange hover:from-brand-light hover:to-brand-peach text-white font-bold rounded-lg transition-all duration-200 transform hover:scale-105 active:scale-95 shadow-lg text-sm sm:text-base"
+            >
+              💡 Suggest a word for tomorrow
+            </button>
+          )}
+          {showSuggestionBox && !suggestionSubmitted && (
+            <div className="bg-brand-dark border-2 border-brand-orange rounded-lg p-4 sm:p-5 space-y-3 shadow-lg animate-fade-in-up">
+              <p className="text-sm text-brand-light text-center font-semibold">💭 What word would you like to see?</p>
+              <input
+                type="text"
+                value={suggestionWord}
+                onChange={(e) => setSuggestionWord(e.target.value)}
+                maxLength={15}
+                placeholder="e.g., VALIDATION"
+                autoFocus
+                className="w-full p-3 bg-brand-dark border-2 border-brand-mid rounded-lg text-brand-light text-center uppercase font-bold tracking-wider focus:border-brand-orange focus:outline-none transition-colors"
+              />
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={handleSuggestionSubmit}
+                  className="flex-1 bg-brand-orange hover:bg-brand-peach text-brand-dark font-bold py-2 sm:py-3 rounded-lg transition-colors active:scale-95 text-sm sm:text-base"
+                >
+                  ✨ Submit
+                </button>
+                <button
+                  onClick={() => {
+                    setShowSuggestionBox(false);
+                    setSuggestionWord("");
+                    setSuggestionStatus("");
+                  }}
+                  className="flex-1 bg-brand-mid hover:bg-brand-light text-white font-bold py-2 sm:py-3 rounded-lg transition-colors active:scale-95 text-sm sm:text-base"
+                >
+                  ✕ Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          {suggestionSubmitted && (
+            <p className="text-sm text-center text-brand-peach font-semibold mt-3">✅ Thank you! Your suggestion has been recorded.</p>
+          )}
+          {suggestionStatus && (
+            <p className="text-sm text-center text-brand-peach font-semibold mt-2">{suggestionStatus}</p>
+          )}
         </div>
       </div>
-    )}
-    {suggestionSubmitted && (
-      <p className="text-sm text-center text-brand-peach font-semibold mt-3">✅ Thank you! Your suggestion has been recorded.</p>
-    )}
-    {suggestionStatus && (
-      <p className="text-sm text-center text-brand-peach font-semibold mt-2">{suggestionStatus}</p>
-    )}
-  </div>
-</div>
 
-      {!alreadyCompleted && (
+      {/* Keyboard (hidden during daily admire or after bonus game over) */}
+      {!alreadyCompleted && !(inBonusRound && bonusGameOver) && (
         <div className="w-full max-w-lg pb-4 px-1 flex-shrink-0">
           {KEYBOARD_ROWS.map((row, i) => (
             <div key={i} className="flex justify-center my-0.5 sm:my-1">
