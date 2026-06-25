@@ -1,0 +1,15 @@
+
+> mesdle@0.1.0 dev
+> next dev --hostname 0.0.0.0
+
+▲ Next.js 16.2.9 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://0.0.0.0:3000
+- Environments: .env.local
+✓ Ready in 426ms
+⚠ Slow filesystem detected. The benchmark took 239ms. If /workspaces/Wordl3/.next/dev is a network drive, consider moving it to a local folder.
+See more: https://nextjs.org/docs/app/guides/local-development
+
+ GET / 200 in 551ms (next.js: 180ms, application-code: 371ms)
+ GET / 200 in 154ms (next.js: 5ms, application-code: 149ms)
+ HEAD / 200 in 414ms (next.js: 211ms, application-code: 202ms)
