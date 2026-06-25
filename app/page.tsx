@@ -29,6 +29,7 @@ export default function Home() {
   const [showPasswordSignUp, setShowPasswordSignUp] = useState(false);
   const isValidEmployeeId = (id: string) => /^IN\d+$/i.test(id);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [hasSeenTutorial, setHasSeenTutorial] = useState(false);
 
   // Fetch today's puzzle
   useEffect(() => {
@@ -62,13 +63,16 @@ export default function Home() {
   // Show tutorial only if not previously seen
   useEffect(() => {
     const seenTutorial = localStorage.getItem("wordl3_tutorial_seen");
-    if (!seenTutorial) {
-      setShowTutorial(true);
+    if (seenTutorial) {
+      setHasSeenTutorial(true);
+      return;
     }
+    setShowTutorial(true);
   }, []);
 
   const closeTutorial = () => {
     setShowTutorial(false);
+    setHasSeenTutorial(true);
     localStorage.setItem("wordl3_tutorial_seen", "true");
   };
 
@@ -192,14 +196,17 @@ export default function Home() {
 
             {!isSignUp ? (
               <>
-                <p className="text-sm text-brand-light mb-4">
+                <p className="text-sm text-brand-light mb-2">
                   Enter your Employee ID to play.
+                </p>
+                <p className="text-xs text-brand-mid mb-3">
+                  Format: IN1234
                 </p>
                 <input
                   type="text"
                   value={employeeInput}
                   onChange={(e) => setEmployeeInput(e.target.value)}
-                  placeholder="e.g., EMP001"
+                  placeholder="e.g., IN1234"
                   required
                   autoFocus
                   className="w-full p-3 mb-3 bg-brand-dark border border-brand-mid rounded text-brand-light placeholder:text-brand-mid text-center text-lg tracking-wider"
@@ -239,8 +246,8 @@ export default function Home() {
                     New account for{" "}
                     <span className="font-bold">{employeeInput.trim()}</span>
                   </p>
-                  <p className="text-xs text-brand-mid mb-4">
-                    Create a password and choose a display name.
+                  <p className="text-xs text-brand-mid mb-3">
+                    Use your Employee ID format like IN1234, then create a password and display name.
                   </p>
                   <input
                     type="text"
@@ -315,6 +322,8 @@ export default function Home() {
           employeeId={employeeId}
           displayName={displayName}
           changeEmployeeId={changeEmployeeId}
+          onShowTutorial={() => setShowTutorial(true)}
+          showHowToPlayButton={hasSeenTutorial}
         />
       )}
     </>
